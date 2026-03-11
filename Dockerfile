@@ -81,7 +81,7 @@ LABEL org.opencontainers.image.description="OpenClaw AI Assistant on Railway"
 
 ENV NODE_ENV=production
 
-# Only install runtime-essential packages (no build-essential in production)
+# Runtime packages + temporary build deps for native addons (node-pty)
 RUN apt-get update \
   && DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends \
     ca-certificates \
@@ -90,16 +90,19 @@ RUN apt-get update \
     gosu \
     procps \
     python3 \
-    build-essential \
   && rm -rf /var/lib/apt/lists/* \
   && apt-get clean
 
 WORKDIR /app
 
-# Wrapper deps
+# Wrapper deps — install build-essential temporarily for node-pty, then remove
 RUN corepack enable
 COPY package.json pnpm-lock.yaml ./
-RUN pnpm install --prod --frozen-lockfile && pnpm store prune
+RUN apt-get update \
+  && DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends build-essential \
+  && pnpm install --prod --frozen-lockfile && pnpm store prune \
+  && apt-get purge -y --auto-remove build-essential \
+  && rm -rf /var/lib/apt/lists/*
 
 # Copy built openclaw
 COPY --from=openclaw-build /openclaw /openclaw

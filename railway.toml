@@ -4,7 +4,7 @@ builder = "dockerfile"
 [deploy]
 # Use the public /healthz endpoint (no auth required) for Railway health checks
 healthcheckPath = "/healthz"
-healthcheckTimeout = 300
+healthcheckTimeout = 180
 restartPolicyType = "on_failure"
 restartPolicyMaxRetries = 5
 

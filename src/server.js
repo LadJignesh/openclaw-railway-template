@@ -152,6 +152,9 @@ let gatewayProc = null;
 let gatewayStarting = null;
 let gatewayHealthy = false;  // Track if gateway responded to health check
 let shuttingDown = false;    // Set true on SIGTERM/SIGINT to suppress auto-restart
+let gatewayRestartCount = 0; // Track consecutive auto-restarts for backoff
+const GATEWAY_MAX_RESTARTS = 10;
+const GATEWAY_BACKOFF_BASE_MS = 2000;
 
 // Debug breadcrumbs for common Railway failures (502 / "Application failed to respond").
 let lastGatewayError = null;
@@ -176,6 +179,7 @@ async function waitForGatewayReady(opts = {}) {
         });
         if (res) {
           console.log(`[gateway] ready at ${endpoint}`);
+          gatewayRestartCount = 0; // Reset backoff on successful health check
           return true;
         }
       } catch (err) {
@@ -271,14 +275,20 @@ async function startGateway() {
     gatewayProc = null;
     gatewayHealthy = false;
     if (!shuttingDown && isConfigured()) {
-      console.log("[gateway] scheduling auto-restart in 2s...");
+      gatewayRestartCount++;
+      if (gatewayRestartCount > GATEWAY_MAX_RESTARTS) {
+        console.error(`[gateway] exceeded ${GATEWAY_MAX_RESTARTS} consecutive restarts — stopping auto-restart to prevent crash loop`);
+        return;
+      }
+      const delayMs = Math.min(GATEWAY_BACKOFF_BASE_MS * Math.pow(2, gatewayRestartCount - 1), 60_000);
+      console.log(`[gateway] scheduling auto-restart in ${delayMs / 1000}s (attempt ${gatewayRestartCount}/${GATEWAY_MAX_RESTARTS})...`);
       setTimeout(() => {
         if (!shuttingDown && !gatewayProc && isConfigured()) {
           ensureGatewayRunning().catch((err) => {
             console.error(`[gateway] auto-restart failed: ${err.message}`);
           });
         }
-      }, 2000);
+      }, delayMs);
     }
   });
 }
@@ -1383,6 +1393,8 @@ app.post("/setup/api/models", requireSetupAuth, async (req, res) => {
   return res.json({ ok: true, output: redactSecrets(extra) });
 });
 
+const VALID_PAIRING_CHANNELS = new Set(["telegram", "discord", "slack"]);
+
 app.post("/setup/api/pairing/approve", requireSetupAuth, async (req, res) => {
   const { channel, code } = req.body || {};
   if (!channel || !code) {
@@ -1390,9 +1402,23 @@ app.post("/setup/api/pairing/approve", requireSetupAuth, async (req, res) => {
       .status(400)
       .json({ ok: false, error: "Missing channel or code" });
   }
+  const ch = String(channel).toLowerCase().trim();
+  if (!VALID_PAIRING_CHANNELS.has(ch)) {
+    return res.status(400).json({
+      ok: false,
+      error: `Invalid channel: must be one of ${[...VALID_PAIRING_CHANNELS].join(", ")}`,
+    });
+  }
+  const cd = String(code).trim();
+  if (!/^[A-Za-z0-9_-]{1,64}$/.test(cd)) {
+    return res.status(400).json({
+      ok: false,
+      error: "Invalid pairing code format (alphanumeric, 1-64 chars)",
+    });
+  }
   const r = await runCmd(
     OPENCLAW_NODE,
-    clawArgs(["pairing", "approve", String(channel), String(code)]),
+    clawArgs(["pairing", "approve", ch, cd]),
   );
   return res
     .status(r.code === 0 ? 200 : 500)
