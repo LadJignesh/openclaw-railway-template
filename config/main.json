@@ -1,0 +1,177 @@
+{
+  "_comment": "OpenClaw production configuration — cost-optimized multi-model setup",
+
+  "models": {
+    "primary": {
+      "model": "anthropic/claude-3-5-sonnet-20241022",
+      "label": "Sonnet (primary)",
+      "description": "Fast, accurate, cost-effective for most coding and analysis tasks",
+      "costPer1MTokens": { "input": 3.00, "output": 15.00 }
+    },
+    "fallback": [
+      {
+        "model": "anthropic/claude-3-opus-20250219",
+        "label": "Opus (complex reasoning)",
+        "description": "Deep reasoning, architecture design, complex debugging",
+        "costPer1MTokens": { "input": 15.00, "output": 75.00 }
+      },
+      {
+        "model": "anthropic/claude-3-haiku-20250307",
+        "label": "Haiku (quick/cheap)",
+        "description": "Quick tasks, summaries, simple Q&A — lowest cost",
+        "costPer1MTokens": { "input": 0.25, "output": 1.25 }
+      },
+      {
+        "model": "openai/gpt-4o",
+        "label": "GPT-4o (multimodal)",
+        "description": "Image analysis, multimodal tasks, vision processing",
+        "costPer1MTokens": { "input": 2.50, "output": 10.00 }
+      },
+      {
+        "model": "openai/gpt-4o-mini",
+        "label": "GPT-4o Mini (fallback)",
+        "description": "Ultra-cheap fallback for simple completions",
+        "costPer1MTokens": { "input": 0.15, "output": 0.60 }
+      }
+    ],
+    "routing": {
+      "enabled": true,
+      "rules": [
+        {
+          "name": "short-to-haiku",
+          "description": "Route tasks under 500 tokens to Haiku for cost savings",
+          "condition": { "maxInputTokens": 500 },
+          "model": "anthropic/claude-3-haiku-20250307"
+        },
+        {
+          "name": "low-complexity-to-sonnet",
+          "description": "Route low-complexity tasks to Sonnet",
+          "condition": { "complexity": "low" },
+          "model": "anthropic/claude-3-5-sonnet-20241022"
+        },
+        {
+          "name": "high-complexity-to-opus",
+          "description": "Route high-complexity tasks to Opus",
+          "condition": { "complexity": "high" },
+          "model": "anthropic/claude-3-opus-20250219"
+        },
+        {
+          "name": "image-to-gpt4o",
+          "description": "Route image/multimodal processing to GPT-4o",
+          "condition": { "hasAttachment": true, "attachmentType": "image" },
+          "model": "openai/gpt-4o"
+        }
+      ]
+    }
+  },
+
+  "costTracking": {
+    "enabled": true,
+    "dailyBudgetUsd": 50.00,
+    "alertThreshold": 0.80,
+    "reportingInterval": "daily",
+    "models": {
+      "anthropic/claude-3-5-sonnet-20241022": { "inputPer1M": 3.00, "outputPer1M": 15.00 },
+      "anthropic/claude-3-opus-20250219":     { "inputPer1M": 15.00, "outputPer1M": 75.00 },
+      "anthropic/claude-3-haiku-20250307":    { "inputPer1M": 0.25, "outputPer1M": 1.25 },
+      "openai/gpt-4o":                        { "inputPer1M": 2.50, "outputPer1M": 10.00 },
+      "openai/gpt-4o-mini":                   { "inputPer1M": 0.15, "outputPer1M": 0.60 }
+    }
+  },
+
+  "integrations": {
+    "google": {
+      "drive": {
+        "enabled": true,
+        "syncPath": "/data/workspace",
+        "credentialsEnvVar": "GOOGLE_CREDENTIALS_JSON"
+      },
+      "gmail": {
+        "enabled": true,
+        "features": ["email-summaries"],
+        "credentialsEnvVar": "GOOGLE_CREDENTIALS_JSON"
+      },
+      "calendar": {
+        "enabled": true,
+        "features": ["meeting-awareness"],
+        "credentialsEnvVar": "GOOGLE_CREDENTIALS_JSON"
+      }
+    }
+  },
+
+  "agents": {
+    "founder": {
+      "name": "Founder",
+      "role": "Strategy, planning, and business decisions",
+      "model": "anthropic/claude-3-opus-20250219",
+      "systemPrompt": "You are a senior startup founder and strategist. Focus on high-level strategy, business planning, product decisions, GTM strategy, fundraising, and investor relations. Be decisive, data-driven, and action-oriented. Prioritize impact and ROI.",
+      "tools": ["web-search", "document-read", "calendar"]
+    },
+    "code": {
+      "name": "Code",
+      "role": "Development, debugging, and refactoring",
+      "model": "anthropic/claude-3-5-sonnet-20241022",
+      "systemPrompt": "You are a senior full-stack engineer specializing in Next.js (App Router, RSC, Server Actions) and FastAPI (async, Pydantic v2, SQLAlchemy 2.0). Write clean, typed, production-ready code. Follow existing conventions. Include tests. Never leave TODO comments without implementation.",
+      "tools": ["code-edit", "terminal", "file-read", "web-search"],
+      "context": {
+        "frameworks": ["next.js", "fastapi"],
+        "languages": ["typescript", "python"]
+      }
+    },
+    "researcher": {
+      "name": "Researcher",
+      "role": "Market analysis, trend research, and competitive intelligence",
+      "model": "anthropic/claude-3-5-sonnet-20241022",
+      "systemPrompt": "You are a senior market research analyst. Conduct thorough research on markets, competitors, trends, and technologies. Provide structured reports with data sources cited. Focus on actionable insights and quantified findings.",
+      "tools": ["web-search", "document-read", "document-write"]
+    },
+    "writer": {
+      "name": "Writer",
+      "role": "Content creation, documentation, and LinkedIn posts",
+      "model": "anthropic/claude-3-5-sonnet-20241022",
+      "systemPrompt": "You are a professional content strategist and writer. Create compelling content: blog posts, documentation, LinkedIn posts, email campaigns, and marketing copy. Match the brand voice, optimize for the target audience, and follow platform best practices. LinkedIn posts should be engaging, use line breaks, and include relevant hashtags.",
+      "tools": ["web-search", "document-write", "document-read"]
+    }
+  },
+
+  "contextPruning": {
+    "mode": "cache-ttl",
+    "ttl": "1h",
+    "maxContextTokens": 100000
+  },
+
+  "caching": {
+    "enabled": true,
+    "ttl": "24h",
+    "strategy": "lru"
+  },
+
+  "heartbeat": {
+    "enabled": true,
+    "intervalMinutes": 30
+  },
+
+  "concurrency": {
+    "maxConcurrentAgents": 8,
+    "maxConcurrentSubagents": 16
+  },
+
+  "timeouts": {
+    "responseTimeoutSeconds": 60,
+    "toolTimeoutSeconds": 45
+  },
+
+  "monitoring": {
+    "metrics": {
+      "enabled": true,
+      "collectInterval": "1m"
+    },
+    "costTracking": {
+      "enabled": true,
+      "reportingInterval": "daily"
+    },
+    "logging": {
+      "level": "info"
+    }
+  }
+}

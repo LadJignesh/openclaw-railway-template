@@ -1,0 +1,471 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>OpenClaw Dashboard</title>
+  <script src="https://cdn.jsdelivr.net/npm/@tailwindcss/browser@4"></script>
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Space+Grotesk:wght@400;500;600;700&display=swap" rel="stylesheet">
+  <style type="text/tailwindcss">
+    @theme {
+      --font-sans: 'Space Grotesk', ui-sans-serif, system-ui, -apple-system, sans-serif;
+      --font-mono: 'JetBrains Mono', 'Fira Code', ui-monospace, monospace;
+    }
+  </style>
+  <style>
+    .bar-animate { transition: width 0.6s cubic-bezier(0.22,1,0.36,1); }
+    .fade-in { animation: fadeIn 0.4s ease-out; }
+    @keyframes fadeIn { from { opacity: 0; transform: translateY(8px); } to { opacity: 1; transform: none; } }
+    @keyframes pulse-dot { 0%, 100% { opacity: 1; } 50% { opacity: 0.4; } }
+    .pulse-dot { animation: pulse-dot 2s ease-in-out infinite; }
+    .sparkline-bar { transition: height 0.4s ease-out; }
+  </style>
+</head>
+<body class="bg-neutral-950 text-neutral-100 min-h-screen font-sans">
+  <div id="app" class="max-w-7xl mx-auto px-4 py-8">
+    <!-- Header -->
+    <div class="flex items-center justify-between mb-8">
+      <div>
+        <h1 class="text-2xl font-bold tracking-tight flex items-center gap-3">
+          <span class="text-3xl">🦞</span> OpenClaw Dashboard
+        </h1>
+        <p class="text-neutral-500 text-sm mt-1">Real-time model usage, cost tracking & smart routing statistics</p>
+      </div>
+      <div class="flex items-center gap-3">
+        <span id="gateway-status" class="inline-flex items-center gap-2 text-xs font-medium px-3 py-1.5 rounded-full bg-neutral-800 border border-neutral-700">
+          <span class="w-2 h-2 rounded-full bg-neutral-600"></span> Loading...
+        </span>
+        <button onclick="refreshData()" class="bg-neutral-800 hover:bg-neutral-700 border border-neutral-700 text-neutral-300 px-3 py-1.5 rounded-lg text-sm font-medium transition-colors">
+          ↻ Refresh
+        </button>
+        <a href="/setup" class="text-neutral-500 hover:text-neutral-300 text-sm transition-colors">Setup →</a>
+      </div>
+    </div>
+
+    <!-- Loading state -->
+    <div id="loading" class="flex items-center justify-center py-24">
+      <div class="flex flex-col items-center gap-3">
+        <div class="w-8 h-8 border-2 border-neutral-700 border-t-purple-500 rounded-full animate-spin"></div>
+        <span class="text-neutral-500 text-sm">Loading dashboard...</span>
+      </div>
+    </div>
+
+    <!-- Error state -->
+    <div id="error" class="hidden bg-red-900/20 border border-red-800 rounded-xl p-6 text-center">
+      <p class="text-red-400 font-medium">Failed to load dashboard data</p>
+      <p id="error-msg" class="text-red-500/70 text-sm mt-1"></p>
+      <button onclick="refreshData()" class="mt-3 bg-red-900/40 hover:bg-red-900/60 text-red-300 px-4 py-2 rounded-lg text-sm transition-colors">Retry</button>
+    </div>
+
+    <!-- Dashboard content (hidden until data loads) -->
+    <div id="content" class="hidden space-y-6">
+
+      <!-- Row 1: KPI Cards -->
+      <div class="grid grid-cols-2 md:grid-cols-4 gap-4">
+        <div class="bg-neutral-900 border border-neutral-800 rounded-xl p-5 fade-in">
+          <p class="text-xs uppercase tracking-wider text-neutral-500 font-medium">Daily Spend</p>
+          <p class="text-2xl font-bold mt-2 text-white">$<span id="kpi-spend">0.00</span></p>
+          <div class="mt-3 h-2 bg-neutral-800 rounded-full overflow-hidden">
+            <div id="kpi-spend-bar" class="h-full rounded-full bar-animate bg-gradient-to-r from-emerald-500 to-emerald-400" style="width: 0%"></div>
+          </div>
+          <p class="text-xs text-neutral-500 mt-1.5">of $<span id="kpi-budget">50</span> budget (<span id="kpi-pct">0</span>%)</p>
+        </div>
+        <div class="bg-neutral-900 border border-neutral-800 rounded-xl p-5 fade-in">
+          <p class="text-xs uppercase tracking-wider text-neutral-500 font-medium">Total Requests</p>
+          <p class="text-2xl font-bold mt-2 text-white"><span id="kpi-requests">0</span></p>
+          <p class="text-xs text-neutral-500 mt-1.5">API calls today</p>
+        </div>
+        <div class="bg-neutral-900 border border-neutral-800 rounded-xl p-5 fade-in">
+          <p class="text-xs uppercase tracking-wider text-neutral-500 font-medium">Total Tokens</p>
+          <p class="text-2xl font-bold mt-2 text-white"><span id="kpi-tokens">0</span></p>
+          <p class="text-xs text-neutral-500 mt-1.5"><span id="kpi-input-tokens">0</span> in / <span id="kpi-output-tokens">0</span> out</p>
+        </div>
+        <div class="bg-neutral-900 border border-neutral-800 rounded-xl p-5 fade-in">
+          <p class="text-xs uppercase tracking-wider text-neutral-500 font-medium">Avg Cost/Request</p>
+          <p class="text-2xl font-bold mt-2 text-white">$<span id="kpi-avg-cost">0.00</span></p>
+          <p class="text-xs text-neutral-500 mt-1.5">Uptime: <span id="kpi-uptime">—</span></p>
+        </div>
+      </div>
+
+      <!-- Row 2: Hourly Chart + Budget Gauge -->
+      <div class="grid grid-cols-1 lg:grid-cols-3 gap-4">
+        <!-- Hourly Spend Chart -->
+        <div class="lg:col-span-2 bg-neutral-900 border border-neutral-800 rounded-xl p-5">
+          <h2 class="text-sm font-semibold text-neutral-300 mb-4">Hourly Spend</h2>
+          <div id="hourly-chart" class="flex items-end gap-1 h-32">
+            <p class="text-neutral-600 text-xs">No data yet — usage will appear here</p>
+          </div>
+        </div>
+        <!-- Budget Gauge -->
+        <div class="bg-neutral-900 border border-neutral-800 rounded-xl p-5 flex flex-col items-center justify-center">
+          <h2 class="text-sm font-semibold text-neutral-300 mb-4">Budget Usage</h2>
+          <div class="relative w-36 h-36">
+            <svg viewBox="0 0 120 120" class="w-full h-full -rotate-90">
+              <circle cx="60" cy="60" r="52" fill="none" stroke="#262626" stroke-width="10" />
+              <circle id="gauge-circle" cx="60" cy="60" r="52" fill="none" stroke="#22c55e" stroke-width="10"
+                stroke-dasharray="326.73" stroke-dashoffset="326.73" stroke-linecap="round"
+                class="transition-all duration-1000 ease-out" />
+            </svg>
+            <div class="absolute inset-0 flex flex-col items-center justify-center">
+              <span id="gauge-pct" class="text-3xl font-bold text-white">0%</span>
+              <span class="text-xs text-neutral-500">of daily limit</span>
+            </div>
+          </div>
+        </div>
+      </div>
+
+      <!-- Row 3: Per-Model Breakdown + Routing Stats -->
+      <div class="grid grid-cols-1 lg:grid-cols-2 gap-4">
+        <!-- Per-Model Breakdown -->
+        <div class="bg-neutral-900 border border-neutral-800 rounded-xl p-5">
+          <h2 class="text-sm font-semibold text-neutral-300 mb-4">Model Usage Breakdown</h2>
+          <div id="model-breakdown" class="space-y-3">
+            <p class="text-neutral-600 text-sm">No model usage recorded yet</p>
+          </div>
+        </div>
+        <!-- Routing Stats -->
+        <div class="bg-neutral-900 border border-neutral-800 rounded-xl p-5">
+          <h2 class="text-sm font-semibold text-neutral-300 mb-4">Smart Routing Activity</h2>
+          <div id="routing-stats" class="space-y-3">
+            <p class="text-neutral-600 text-sm">No routing decisions recorded yet</p>
+          </div>
+        </div>
+      </div>
+
+      <!-- Row 4: Agents + Config Overview -->
+      <div class="grid grid-cols-1 lg:grid-cols-2 gap-4">
+        <!-- Agents -->
+        <div class="bg-neutral-900 border border-neutral-800 rounded-xl p-5">
+          <h2 class="text-sm font-semibold text-neutral-300 mb-4">Specialized Agents</h2>
+          <div id="agents-list" class="space-y-3">
+            <p class="text-neutral-600 text-sm">No agents configured</p>
+          </div>
+        </div>
+        <!-- Config Overview -->
+        <div class="bg-neutral-900 border border-neutral-800 rounded-xl p-5">
+          <h2 class="text-sm font-semibold text-neutral-300 mb-4">System Configuration</h2>
+          <div id="config-overview" class="space-y-2 text-sm">
+            <p class="text-neutral-600">Loading configuration...</p>
+          </div>
+        </div>
+      </div>
+
+      <!-- Row 5: Model Pricing Reference -->
+      <div class="bg-neutral-900 border border-neutral-800 rounded-xl p-5">
+        <h2 class="text-sm font-semibold text-neutral-300 mb-4">Model Pricing Reference</h2>
+        <div class="overflow-x-auto">
+          <table class="w-full text-sm">
+            <thead>
+              <tr class="text-neutral-500 text-xs uppercase tracking-wider border-b border-neutral-800">
+                <th class="text-left py-2 pr-4 font-medium">Model</th>
+                <th class="text-right py-2 px-4 font-medium">Input $/1M</th>
+                <th class="text-right py-2 px-4 font-medium">Output $/1M</th>
+                <th class="text-right py-2 pl-4 font-medium">Relative Cost</th>
+              </tr>
+            </thead>
+            <tbody id="pricing-table">
+              <tr><td class="py-2 text-neutral-600" colspan="4">Loading...</td></tr>
+            </tbody>
+          </table>
+        </div>
+      </div>
+
+      <!-- Footer -->
+      <div class="text-center text-xs text-neutral-700 py-4">
+        Data resets daily at midnight UTC · Last update: <span id="last-update">—</span> · Auto-refresh every 30s
+      </div>
+    </div>
+  </div>
+
+  <script>
+    const MODEL_COLORS = {
+      'anthropic/claude-3-5-sonnet-20241022': { bg: 'bg-orange-500/20', text: 'text-orange-400', bar: 'bg-orange-500', border: 'border-orange-500/30' },
+      'anthropic/claude-3-opus-20250219':     { bg: 'bg-purple-500/20', text: 'text-purple-400', bar: 'bg-purple-500', border: 'border-purple-500/30' },
+      'anthropic/claude-3-haiku-20250307':    { bg: 'bg-cyan-500/20',   text: 'text-cyan-400',   bar: 'bg-cyan-500',   border: 'border-cyan-500/30' },
+      'openai/gpt-4o':                        { bg: 'bg-green-500/20',  text: 'text-green-400',  bar: 'bg-green-500',  border: 'border-green-500/30' },
+      'openai/gpt-4o-mini':                   { bg: 'bg-teal-500/20',   text: 'text-teal-400',   bar: 'bg-teal-500',   border: 'border-teal-500/30' },
+    };
+    const DEFAULT_COLOR = { bg: 'bg-neutral-500/20', text: 'text-neutral-400', bar: 'bg-neutral-500', border: 'border-neutral-500/30' };
+
+    const AGENT_ICONS = { founder: '👔', code: '💻', researcher: '🔍', writer: '✍️' };
+
+    function getColor(model) { return MODEL_COLORS[model] || DEFAULT_COLOR; }
+    function shortModel(model) { return (model || '').split('/').pop() || model; }
+    function fmtNum(n) { return n >= 1_000_000 ? (n / 1_000_000).toFixed(1) + 'M' : n >= 1_000 ? (n / 1_000).toFixed(1) + 'K' : String(n); }
+    function fmtUsd(n) { return n >= 1 ? n.toFixed(2) : n >= 0.01 ? n.toFixed(3) : n.toFixed(4); }
+    function fmtUptime(ms) {
+      const h = Math.floor(ms / 3_600_000);
+      const m = Math.floor((ms % 3_600_000) / 60_000);
+      return h > 0 ? `${h}h ${m}m` : `${m}m`;
+    }
+    function escHtml(s) {
+      const d = document.createElement('div');
+      d.textContent = s;
+      return d.innerHTML;
+    }
+
+    let refreshTimer = null;
+
+    async function refreshData() {
+      try {
+        const res = await fetch('/setup/api/dashboard/stats', { credentials: 'same-origin' });
+        if (!res.ok) throw new Error(`HTTP ${res.status}`);
+        const data = await res.json();
+        if (!data.ok) throw new Error(data.error || 'Unknown error');
+        render(data);
+        document.getElementById('loading').classList.add('hidden');
+        document.getElementById('error').classList.add('hidden');
+        document.getElementById('content').classList.remove('hidden');
+      } catch (err) {
+        document.getElementById('loading').classList.add('hidden');
+        document.getElementById('content').classList.add('hidden');
+        document.getElementById('error').classList.remove('hidden');
+        document.getElementById('error-msg').textContent = String(err);
+      }
+    }
+
+    function render(data) {
+      const s = data.summary || {};
+      const pct = s.percentUsed || 0;
+
+      // KPIs
+      document.getElementById('kpi-spend').textContent = fmtUsd(s.dailySpendUsd || 0);
+      document.getElementById('kpi-budget').textContent = s.dailyBudgetUsd || 50;
+      document.getElementById('kpi-pct').textContent = pct.toFixed(1);
+      document.getElementById('kpi-requests').textContent = fmtNum(s.totalRequests || 0);
+      document.getElementById('kpi-tokens').textContent = fmtNum(s.totalTokens || 0);
+      document.getElementById('kpi-input-tokens').textContent = fmtNum(s.totalInputTokens || 0);
+      document.getElementById('kpi-output-tokens').textContent = fmtNum(s.totalOutputTokens || 0);
+      const avgCost = s.totalRequests > 0 ? (s.dailySpendUsd / s.totalRequests) : 0;
+      document.getElementById('kpi-avg-cost').textContent = fmtUsd(avgCost);
+      document.getElementById('kpi-uptime').textContent = fmtUptime(s.uptimeMs || 0);
+
+      // Spend bar color
+      const bar = document.getElementById('kpi-spend-bar');
+      bar.style.width = Math.min(pct, 100) + '%';
+      if (pct > 80) {
+        bar.className = bar.className.replace(/from-\S+ to-\S+/, 'from-red-500 to-red-400');
+      } else if (pct > 50) {
+        bar.className = bar.className.replace(/from-\S+ to-\S+/, 'from-amber-500 to-amber-400');
+      }
+
+      // Gauge
+      const circumference = 326.73;
+      const offset = circumference - (circumference * Math.min(pct, 100) / 100);
+      const gauge = document.getElementById('gauge-circle');
+      gauge.style.strokeDashoffset = offset;
+      gauge.style.stroke = pct > 80 ? '#ef4444' : pct > 50 ? '#f59e0b' : '#22c55e';
+      document.getElementById('gauge-pct').textContent = pct.toFixed(1) + '%';
+
+      // Gateway status
+      const gw = data.gateway || {};
+      const statusEl = document.getElementById('gateway-status');
+      if (gw.running) {
+        statusEl.innerHTML = '<span class="w-2 h-2 rounded-full bg-emerald-500 pulse-dot"></span> Gateway Running';
+        statusEl.className = statusEl.className.replace(/bg-\S+ border-\S+/, 'bg-emerald-900/30 border-emerald-800');
+      } else if (gw.starting) {
+        statusEl.innerHTML = '<span class="w-2 h-2 rounded-full bg-amber-500 pulse-dot"></span> Gateway Starting';
+        statusEl.className = statusEl.className.replace(/bg-\S+ border-\S+/, 'bg-amber-900/30 border-amber-800');
+      } else {
+        statusEl.innerHTML = '<span class="w-2 h-2 rounded-full bg-red-500"></span> Gateway Down';
+        statusEl.className = statusEl.className.replace(/bg-\S+ border-\S+/, 'bg-red-900/30 border-red-800');
+      }
+
+      // Hourly chart
+      renderHourlyChart(data.hourlySpend || []);
+
+      // Model breakdown
+      renderModelBreakdown(data.modelBreakdown || [], s.dailySpendUsd);
+
+      // Routing stats
+      renderRoutingStats(data.routingStats || [], data.config);
+
+      // Agents
+      renderAgents(data.config?.agents || []);
+
+      // Config overview
+      renderConfigOverview(data.config);
+
+      // Pricing table
+      renderPricingTable(data.config?.costRates || {}, data.config?.primaryModel);
+
+      // Timestamp
+      document.getElementById('last-update').textContent = new Date().toLocaleTimeString();
+    }
+
+    function renderHourlyChart(hours) {
+      const container = document.getElementById('hourly-chart');
+      if (!hours.length) {
+        container.innerHTML = '<p class="text-neutral-600 text-xs">No data yet — usage will appear here as requests are made</p>';
+        return;
+      }
+      const maxCost = Math.max(...hours.map(h => h.costUsd), 0.001);
+      container.innerHTML = hours.map(h => {
+        const pct = Math.max((h.costUsd / maxCost) * 100, 2);
+        return `<div class="flex-1 flex flex-col items-center gap-1 group cursor-default">
+          <div class="relative w-full flex justify-center">
+            <div class="absolute -top-7 bg-neutral-800 border border-neutral-700 text-xs text-neutral-300 px-2 py-0.5 rounded opacity-0 group-hover:opacity-100 transition-opacity whitespace-nowrap z-10">
+              $${fmtUsd(h.costUsd)} · ${h.requests} req
+            </div>
+          </div>
+          <div class="w-full bg-purple-500/80 rounded-t sparkline-bar" style="height: ${pct}%"></div>
+          <span class="text-[10px] text-neutral-600">${escHtml(h.hour)}</span>
+        </div>`;
+      }).join('');
+    }
+
+    function renderModelBreakdown(models, totalSpend) {
+      const container = document.getElementById('model-breakdown');
+      if (!models.length) {
+        container.innerHTML = '<p class="text-neutral-600 text-sm">No model usage recorded yet — send a message to see stats</p>';
+        return;
+      }
+      container.innerHTML = models.map(m => {
+        const c = getColor(m.model);
+        const pctWidth = totalSpend > 0 ? Math.max((m.costUsd / totalSpend) * 100, 1) : 0;
+        return `<div class="${c.bg} border ${c.border} rounded-lg p-3">
+          <div class="flex items-center justify-between mb-2">
+            <span class="font-medium text-sm ${c.text}">${escHtml(shortModel(m.model))}</span>
+            <span class="text-xs text-neutral-400">$${fmtUsd(m.costUsd)} · ${m.percentOfSpend}%</span>
+          </div>
+          <div class="h-1.5 bg-neutral-800 rounded-full overflow-hidden mb-2">
+            <div class="${c.bar} h-full rounded-full bar-animate" style="width: ${pctWidth}%"></div>
+          </div>
+          <div class="flex justify-between text-xs text-neutral-500">
+            <span>${fmtNum(m.requests)} requests</span>
+            <span>${fmtNum(m.inputTokens)} in / ${fmtNum(m.outputTokens)} out</span>
+          </div>
+        </div>`;
+      }).join('');
+    }
+
+    function renderRoutingStats(stats, config) {
+      const container = document.getElementById('routing-stats');
+      const rules = config?.routingRules || [];
+
+      if (!stats.length && !rules.length) {
+        container.innerHTML = '<p class="text-neutral-600 text-sm">Smart routing not configured</p>';
+        return;
+      }
+
+      let html = '';
+
+      // Show configured rules with hit counts
+      if (rules.length) {
+        html += '<div class="space-y-2">';
+        for (const rule of rules) {
+          const stat = stats.find(s => s.rule === rule.name);
+          const hits = stat ? stat.hits : 0;
+          const c = getColor(rule.model);
+          html += `<div class="flex items-center justify-between bg-neutral-800/50 rounded-lg px-3 py-2">
+            <div class="flex items-center gap-3 min-w-0">
+              <div class="w-2 h-2 rounded-full ${c.bar} flex-shrink-0"></div>
+              <div class="min-w-0">
+                <p class="text-sm font-medium text-neutral-200 truncate">${escHtml(rule.name)}</p>
+                <p class="text-xs text-neutral-500 truncate">${escHtml(rule.description || '')} → ${escHtml(shortModel(rule.model))}</p>
+              </div>
+            </div>
+            <span class="text-sm font-mono ${hits > 0 ? 'text-purple-400' : 'text-neutral-600'} flex-shrink-0 ml-3">${hits}</span>
+          </div>`;
+        }
+        html += '</div>';
+      }
+
+      // Show routing enabled status
+      const enabled = config?.routingEnabled;
+      html += `<div class="mt-3 flex items-center gap-2 text-xs ${enabled ? 'text-emerald-500' : 'text-neutral-600'}">
+        <span class="w-1.5 h-1.5 rounded-full ${enabled ? 'bg-emerald-500' : 'bg-neutral-600'}"></span>
+        Smart routing ${enabled ? 'enabled' : 'disabled'}
+      </div>`;
+
+      container.innerHTML = html;
+    }
+
+    function renderAgents(agents) {
+      const container = document.getElementById('agents-list');
+      if (!agents.length) {
+        container.innerHTML = '<p class="text-neutral-600 text-sm">No specialized agents configured</p>';
+        return;
+      }
+      container.innerHTML = agents.map(a => {
+        const icon = AGENT_ICONS[a.id] || '🤖';
+        const c = getColor(a.model);
+        return `<div class="flex items-start gap-3 bg-neutral-800/50 rounded-lg px-3 py-2.5">
+          <span class="text-xl flex-shrink-0">${icon}</span>
+          <div class="min-w-0">
+            <p class="text-sm font-medium text-neutral-200">${escHtml(a.name)}</p>
+            <p class="text-xs text-neutral-500">${escHtml(a.role)}</p>
+            <span class="inline-block mt-1 text-[10px] ${c.text} ${c.bg} px-1.5 py-0.5 rounded">${escHtml(shortModel(a.model))}</span>
+          </div>
+        </div>`;
+      }).join('');
+    }
+
+    function renderConfigOverview(config) {
+      const container = document.getElementById('config-overview');
+      if (!config) {
+        container.innerHTML = '<p class="text-neutral-600">No config/main.json found</p>';
+        return;
+      }
+      const items = [
+        ['Primary Model', shortModel(config.primaryModel) || '—'],
+        ['Fallback Models', config.fallbackModels?.length ? config.fallbackModels.map(shortModel).join(', ') : '—'],
+        ['Smart Routing', config.routingEnabled ? `Enabled (${config.routingRules?.length || 0} rules)` : 'Disabled'],
+        ['Daily Budget', `$${config.dailyBudgetUsd}`],
+        ['Alert Threshold', `${(config.alertThreshold * 100).toFixed(0)}%`],
+        ['Max Agents', config.concurrency?.maxConcurrentAgents || '—'],
+        ['Max Subagents', config.concurrency?.maxConcurrentSubagents || '—'],
+        ['Context Pruning', config.contextPruning?.mode ? `${config.contextPruning.mode} / ${config.contextPruning.ttl} TTL / ${fmtNum(config.contextPruning.maxContextTokens || 0)} max tokens` : 'Off'],
+        ['Caching', config.caching?.enabled ? `${config.caching.strategy?.toUpperCase()} / ${config.caching.ttl} TTL` : 'Disabled'],
+        ['Heartbeat', config.heartbeat?.enabled ? `Every ${config.heartbeat.intervalMinutes}m` : 'Disabled'],
+      ];
+      container.innerHTML = items.map(([k, v]) =>
+        `<div class="flex justify-between py-1.5 border-b border-neutral-800/50 last:border-0">
+          <span class="text-neutral-500">${escHtml(k)}</span>
+          <span class="text-neutral-300 font-medium text-right">${escHtml(String(v))}</span>
+        </div>`
+      ).join('');
+    }
+
+    function renderPricingTable(rates, primaryModel) {
+      const container = document.getElementById('pricing-table');
+      const entries = Object.entries(rates);
+      if (!entries.length) {
+        container.innerHTML = '<tr><td class="py-2 text-neutral-600" colspan="4">No pricing data in config</td></tr>';
+        return;
+      }
+      // Sort cheapest first
+      entries.sort((a, b) => a[1].inputPer1M - b[1].inputPer1M);
+      const maxInput = Math.max(...entries.map(e => e[1].inputPer1M));
+
+      container.innerHTML = entries.map(([model, r]) => {
+        const c = getColor(model);
+        const isPrimary = model === primaryModel;
+        const relPct = maxInput > 0 ? Math.max((r.inputPer1M / maxInput) * 100, 3) : 0;
+        return `<tr class="border-b border-neutral-800/50 last:border-0">
+          <td class="py-2.5 pr-4">
+            <span class="${c.text} font-medium">${escHtml(shortModel(model))}</span>
+            ${isPrimary ? '<span class="ml-1.5 text-[10px] bg-purple-500/20 text-purple-400 px-1.5 py-0.5 rounded">PRIMARY</span>' : ''}
+          </td>
+          <td class="py-2.5 px-4 text-right font-mono text-neutral-300">$${r.inputPer1M.toFixed(2)}</td>
+          <td class="py-2.5 px-4 text-right font-mono text-neutral-300">$${r.outputPer1M.toFixed(2)}</td>
+          <td class="py-2.5 pl-4">
+            <div class="flex items-center gap-2">
+              <div class="flex-1 h-1.5 bg-neutral-800 rounded-full overflow-hidden">
+                <div class="${c.bar} h-full rounded-full bar-animate" style="width: ${relPct}%"></div>
+              </div>
+              <span class="text-xs text-neutral-500 w-12 text-right">${relPct < 10 ? 'cheap' : relPct < 50 ? 'mid' : 'premium'}</span>
+            </div>
+          </td>
+        </tr>`;
+      }).join('');
+    }
+
+    // Auto-refresh every 30 seconds
+    refreshData();
+    refreshTimer = setInterval(refreshData, 30_000);
+  </script>
+</body>
+</html>
