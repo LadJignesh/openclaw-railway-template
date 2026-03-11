@@ -462,7 +462,7 @@ app.use((_req, res, next) => {
         "script-src 'self' 'unsafe-inline' 'unsafe-eval' https://cdn.jsdelivr.net https://unpkg.com",
         "style-src 'self' 'unsafe-inline' https://cdn.jsdelivr.net https://fonts.googleapis.com",
         "font-src 'self' https://fonts.gstatic.com",
-        "img-src 'self' data:",
+        "img-src 'self' data: https://raw.githubusercontent.com",
         "connect-src 'self'",
         "frame-ancestors 'self'",
       ].join("; "),
@@ -540,6 +540,23 @@ app.get("/setup/healthz", async (_req, res) => {
     gatewayStarting: starting,
     gatewayReachable,
   });
+});
+
+// Logout: forces browser to clear cached Basic Auth credentials
+app.get("/setup/logout", (_req, res) => {
+  res.set("WWW-Authenticate", 'Basic realm="OpenClaw Setup"');
+  res.set("Clear-Site-Data", '"cookies"');
+  return res
+    .status(401)
+    .type("text/html")
+    .send(
+      '<!doctype html><html><head><meta charset="utf-8"><title>Signed Out</title></head>' +
+      '<body style="font-family:system-ui;text-align:center;padding:80px 20px;background:#0a0a0a;color:#e5e5e5">' +
+      '<h2>Signed out of OpenClaw Setup</h2>' +
+      '<p style="color:#737373;margin:12px 0 24px">Your browser credentials have been cleared.</p>' +
+      '<a href="/setup" style="color:#a855f7;text-decoration:underline">Sign in again</a>' +
+      '</body></html>',
+    );
 });
 
 app.get("/setup", requireSetupAuth, (_req, res) => {

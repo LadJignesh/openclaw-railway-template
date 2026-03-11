@@ -338,6 +338,40 @@
         } finally {
           this.loading = false;
         }
+      },
+
+      async importBackup(event) {
+        const file = event.target.files[0];
+        if (!file) return;
+        if (!confirm('Import backup will replace current config and workspace. Continue?')) {
+          event.target.value = '';
+          return;
+        }
+        this.log = 'Importing backup: ' + file.name + ' (' + (file.size / 1024 / 1024).toFixed(1) + ' MB)...\n';
+        this.loading = true;
+        try {
+          const res = await fetch('/setup/import', {
+            method: 'POST',
+            credentials: 'same-origin',
+            headers: { 'content-type': 'application/gzip' },
+            body: file
+          });
+          const text = await res.text();
+          let j;
+          try { j = JSON.parse(text); } catch (_e) { j = { ok: false, output: text }; }
+          if (j.ok) {
+            this.log += '✓ Backup imported successfully\n';
+            if (j.output) this.log += j.output + '\n';
+            await this.refreshStatus();
+          } else {
+            this.log += '✗ Import failed: ' + (j.error || j.output || 'Unknown error') + '\n';
+          }
+        } catch (e) {
+          this.log += '✗ Import error: ' + String(e) + '\n';
+        } finally {
+          this.loading = false;
+          event.target.value = '';
+        }
       }
     }));
   });
@@ -345,42 +379,68 @@
   <script defer src="https://cdn.jsdelivr.net/npm/alpinejs@3.14.8/dist/cdn.min.js"></script>
 </head>
 <body class="bg-neutral-100 dark:bg-neutral-950 text-neutral-900 dark:text-neutral-100 min-h-screen font-sans" x-data="setupApp()">
-  <div class="max-w-3xl mx-auto px-4 py-12 min-w-[400px]">
-    <div class="flex justify-center mb-6">
-      <picture>
-        <source media="(prefers-color-scheme: light)" srcset="https://raw.githubusercontent.com/openclaw/openclaw/main/docs/assets/openclaw-logo-text-dark.png">
-        <img src="https://raw.githubusercontent.com/openclaw/openclaw/main/docs/assets/openclaw-logo-text.png" alt="OpenClaw" class="max-w-[280px] h-auto">
-      </picture>
+  <!-- Top Navigation Bar -->
+  <nav class="border-b border-neutral-200 dark:border-neutral-800 bg-white/80 dark:bg-neutral-900/80 backdrop-blur-md sticky top-0 z-40">
+    <div class="max-w-4xl mx-auto px-4 flex items-center justify-between h-14">
+      <div class="flex items-center gap-2">
+        <svg class="w-7 h-7" viewBox="0 0 64 64" fill="none" xmlns="http://www.w3.org/2000/svg">
+          <circle cx="32" cy="32" r="30" fill="url(#oc-grad)" />
+          <path d="M20 38c2-6 6-12 12-14s10 2 12 8c1 4-1 8-4 10s-8 2-12-1c-3-2-5-5-4-8" stroke="#fff" stroke-width="2.5" stroke-linecap="round" fill="none" opacity=".9"/>
+          <circle cx="35" cy="28" r="2.5" fill="#fff" opacity=".85"/>
+          <path d="M26 22c-3-6-1-10 2-11M38 20c2-7 6-9 9-7" stroke="#fff" stroke-width="2" stroke-linecap="round" opacity=".7"/>
+          <defs><linearGradient id="oc-grad" x1="0" y1="0" x2="64" y2="64"><stop stop-color="#ef4444"/><stop offset="1" stop-color="#dc2626"/></linearGradient></defs>
+        </svg>
+        <span class="font-bold text-lg tracking-tight">OpenClaw</span>
+      </div>
+      <div class="flex items-center gap-1">
+        <a href="/dashboard" class="text-sm text-neutral-500 hover:text-neutral-900 dark:hover:text-neutral-200 px-3 py-1.5 rounded-lg hover:bg-neutral-100 dark:hover:bg-neutral-800 transition-colors">Dashboard</a>
+        <a href="/openclaw" target="_blank" x-show="configured" class="text-sm text-neutral-500 hover:text-neutral-900 dark:hover:text-neutral-200 px-3 py-1.5 rounded-lg hover:bg-neutral-100 dark:hover:bg-neutral-800 transition-colors">Open UI</a>
+        <a x-show="tuiEnabled" href="/tui" target="_blank" class="text-sm text-neutral-500 hover:text-neutral-900 dark:hover:text-neutral-200 px-3 py-1.5 rounded-lg hover:bg-neutral-100 dark:hover:bg-neutral-800 transition-colors">Terminal</a>
+        <a href="/healthz" target="_blank" class="text-sm text-neutral-500 hover:text-neutral-900 dark:hover:text-neutral-200 px-3 py-1.5 rounded-lg hover:bg-neutral-100 dark:hover:bg-neutral-800 transition-colors">Health</a>
+        <div class="w-px h-5 bg-neutral-200 dark:bg-neutral-800 mx-1"></div>
+        <a href="/setup/logout" class="text-sm text-red-500/70 hover:text-red-500 px-3 py-1.5 rounded-lg hover:bg-red-50 dark:hover:bg-red-900/20 transition-colors">Sign Out</a>
+      </div>
     </div>
-    <h1 class="text-2xl font-semibold text-center tracking-tight mb-2">Personal AI Assistant</h1>
-    <p class="text-neutral-500 text-center text-sm mb-8">Configure your AI assistant in a few simple steps</p>
+  </nav>
 
+  <div class="max-w-4xl mx-auto px-4 py-10 min-w-[400px]">
+    <div class="text-center mb-10">
+      <h1 class="text-3xl font-bold tracking-tight mb-2">Personal AI Assistant</h1>
+      <p class="text-neutral-500 text-sm">Configure and manage your OpenClaw instance</p>
+    </div>
+
+    <!-- Status Banner -->
     <div class="bg-white dark:bg-neutral-900 border border-neutral-200 dark:border-neutral-800 rounded-xl p-5 mb-6 shadow-sm dark:shadow-none">
       <div class="flex items-center justify-between">
-        <div>
-          <span class="text-xs uppercase tracking-wide text-neutral-500 font-medium">🦞 OpenClaw</span>
-          <span x-show="openclawVersion" x-text="openclawVersion" class="text-xs text-neutral-400 dark:text-neutral-600 ml-2"></span>
+        <div class="flex items-center gap-3">
+          <span class="relative flex h-3 w-3">
+            <span class="absolute inline-flex h-full w-full rounded-full opacity-75 animate-ping" :class="configured ? 'bg-emerald-400' : 'bg-amber-400'"></span>
+            <span class="relative inline-flex rounded-full h-3 w-3" :class="configured ? 'bg-emerald-500' : 'bg-amber-500'"></span>
+          </span>
+          <div>
+            <span x-text="status" class="text-sm font-medium" :class="configured ? 'text-emerald-700 dark:text-emerald-400' : 'text-amber-700 dark:text-amber-400'"></span>
+            <span x-show="openclawVersion" x-text="'v' + openclawVersion" class="text-xs text-neutral-400 dark:text-neutral-600 ml-2"></span>
+          </div>
         </div>
-        <span x-text="status" class="text-sm" :class="configured ? 'text-emerald-600 dark:text-emerald-400' : 'text-amber-600 dark:text-amber-400'"></span>
-      </div>
-      <div x-show="configured" class="mt-3 pt-3 border-t border-neutral-200 dark:border-neutral-800 flex flex-wrap gap-4">
-        <a href="/openclaw" target="_blank" class="inline-flex items-center gap-2 text-sm text-teal-600 dark:text-teal-400 hover:text-teal-500 dark:hover:text-teal-300 transition-colors">
-          Open OpenClaw UI
-          <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M10 6H6a2 2 0 00-2 2v10a2 2 0 002 2h10a2 2 0 002-2v-4M14 4h6m0 0v6m0-6L10 14"/></svg>
-        </a>
-        <a x-show="tuiEnabled" href="/tui" target="_blank" class="inline-flex items-center gap-2 text-sm text-purple-600 dark:text-purple-400 hover:text-purple-500 dark:hover:text-purple-300 transition-colors">
-          Open Terminal
-          <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M8 9l3 3-3 3m5 0h3M5 20h14a2 2 0 002-2V6a2 2 0 00-2-2H5a2 2 0 00-2 2v12a2 2 0 002 2z"/></svg>
-        </a>
+        <div x-show="configured" class="flex items-center gap-2">
+          <a href="/dashboard" class="inline-flex items-center gap-1.5 text-xs bg-purple-100 dark:bg-purple-500/20 text-purple-700 dark:text-purple-300 px-3 py-1.5 rounded-lg hover:bg-purple-200 dark:hover:bg-purple-500/30 transition-colors font-medium">
+            <svg class="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 19v-6a2 2 0 00-2-2H5a2 2 0 00-2 2v6a2 2 0 002 2h2a2 2 0 002-2zm0 0V9a2 2 0 012-2h2a2 2 0 012 2v10m-6 0a2 2 0 002 2h2a2 2 0 002-2m0 0V5a2 2 0 012-2h2a2 2 0 012 2v14a2 2 0 01-2 2h-2a2 2 0 01-2-2z"/></svg>
+            Dashboard
+          </a>
+          <a href="/openclaw" target="_blank" class="inline-flex items-center gap-1.5 text-xs bg-teal-100 dark:bg-teal-500/20 text-teal-700 dark:text-teal-300 px-3 py-1.5 rounded-lg hover:bg-teal-200 dark:hover:bg-teal-500/30 transition-colors font-medium">
+            <svg class="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M10 6H6a2 2 0 00-2 2v10a2 2 0 002 2h10a2 2 0 002-2v-4M14 4h6m0 0v6m0-6L10 14"/></svg>
+            Open UI
+          </a>
+        </div>
       </div>
     </div>
 
     <div x-show="isReady && configured" x-cloak>
-      <div class="bg-white dark:bg-neutral-900 border border-neutral-200 dark:border-neutral-800 rounded-xl p-6 shadow-sm dark:shadow-none">
-        <h2 class="text-lg font-semibold mb-1">Setup Complete</h2>
-        <p class="text-neutral-500 text-sm mb-6">Your OpenClaw instance is configured and running</p>
+      <div class="bg-white dark:bg-neutral-900 border border-neutral-200 dark:border-neutral-800 rounded-xl p-6 shadow-sm dark:shadow-none mb-6">
+        <h2 class="text-lg font-semibold mb-1">Quick Actions</h2>
+        <p class="text-neutral-500 text-sm mb-6">Manage your running OpenClaw instance</p>
 
-        <div class="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-4 mb-4">
+        <div class="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-4 mb-6">
           <div class="flex flex-col bg-amber-50 dark:bg-amber-900/20 rounded-xl p-4 border border-amber-200 dark:border-amber-800">
             <div class="flex items-center gap-3 mb-3">
               <div class="w-10 h-10 bg-amber-500/20 rounded-lg flex items-center justify-center">
@@ -444,6 +504,43 @@
         </div>
 
         <div x-show="log" class="bg-neutral-100 dark:bg-neutral-950 border border-neutral-200 dark:border-neutral-800 rounded-lg p-4 font-mono text-xs text-neutral-600 dark:text-neutral-400 whitespace-pre-wrap max-h-64 overflow-y-auto" x-text="log"></div>
+      </div>
+
+      <!-- Backup & Data Section -->
+      <div class="bg-white dark:bg-neutral-900 border border-neutral-200 dark:border-neutral-800 rounded-xl p-6 shadow-sm dark:shadow-none mb-6">
+        <h2 class="text-lg font-semibold mb-1">Backup & Data</h2>
+        <p class="text-neutral-500 text-sm mb-5">Export or import your configuration and workspace data</p>
+        <div class="grid grid-cols-1 sm:grid-cols-2 gap-4">
+          <div class="bg-neutral-50 dark:bg-neutral-800/50 rounded-lg p-4 border border-neutral-200 dark:border-neutral-700">
+            <div class="flex items-center gap-3 mb-3">
+              <div class="w-9 h-9 bg-emerald-500/10 rounded-lg flex items-center justify-center">
+                <svg class="w-5 h-5 text-emerald-600 dark:text-emerald-400" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M4 16v1a3 3 0 003 3h10a3 3 0 003-3v-1m-4-4l-4 4m0 0l-4-4m4 4V4"/></svg>
+              </div>
+              <div>
+                <p class="font-medium text-sm">Export Backup</p>
+                <p class="text-xs text-neutral-500">Download .tar.gz archive</p>
+              </div>
+            </div>
+            <a href="/setup/export" class="block w-full text-center bg-emerald-100 dark:bg-emerald-900/30 hover:bg-emerald-200 dark:hover:bg-emerald-900/50 text-emerald-700 dark:text-emerald-300 px-4 py-2.5 rounded-lg font-medium text-sm border border-emerald-200 dark:border-emerald-800 transition-colors">
+              Download Backup
+            </a>
+          </div>
+          <div class="bg-neutral-50 dark:bg-neutral-800/50 rounded-lg p-4 border border-neutral-200 dark:border-neutral-700">
+            <div class="flex items-center gap-3 mb-3">
+              <div class="w-9 h-9 bg-blue-500/10 rounded-lg flex items-center justify-center">
+                <svg class="w-5 h-5 text-blue-600 dark:text-blue-400" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M4 16v1a3 3 0 003 3h10a3 3 0 003-3v-1m-4-8l-4-4m0 0L8 8m4-4v12"/></svg>
+              </div>
+              <div>
+                <p class="font-medium text-sm">Import Backup</p>
+                <p class="text-xs text-neutral-500">Restore from .tar.gz</p>
+              </div>
+            </div>
+            <label class="block w-full text-center bg-blue-100 dark:bg-blue-900/30 hover:bg-blue-200 dark:hover:bg-blue-900/50 text-blue-700 dark:text-blue-300 px-4 py-2.5 rounded-lg font-medium text-sm border border-blue-200 dark:border-blue-800 transition-colors cursor-pointer">
+              Select File...
+              <input type="file" accept=".tar.gz,.tgz" class="hidden" @change="importBackup($event)" />
+            </label>
+          </div>
+        </div>
       </div>
     </div>
 
@@ -768,6 +865,11 @@
           <button @click="showModelsModal = false" class="bg-neutral-100 dark:bg-neutral-800 hover:bg-neutral-200 dark:hover:bg-neutral-700 text-neutral-700 dark:text-neutral-300 px-4 py-3 rounded-lg font-medium border border-neutral-300 dark:border-neutral-700 transition-colors">Cancel</button>
         </div>
       </div>
+    </div>
+
+    <!-- Footer -->
+    <div class="text-center text-xs text-neutral-400 dark:text-neutral-600 py-8 mt-4">
+      OpenClaw Railway Template · <a href="/healthz" class="hover:text-neutral-600 dark:hover:text-neutral-400 underline">Health Check</a> · <a href="/dashboard" class="hover:text-neutral-600 dark:hover:text-neutral-400 underline">Dashboard</a>
     </div>
   </div>
 </body>
