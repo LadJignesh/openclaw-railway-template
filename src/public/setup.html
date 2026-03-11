@@ -1,20 +1,40 @@
 <!doctype html>
-<html>
+<html lang="en" class="dark">
 <head>
   <meta charset="utf-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1" />
-  <title>🦞 OpenClaw — Personal AI Assistant</title>
+  <title>OpenClaw Setup</title>
   <script src="https://cdn.jsdelivr.net/npm/@tailwindcss/browser@4"></script>
   <link rel="preconnect" href="https://fonts.googleapis.com">
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
-  <link href="https://fonts.googleapis.com/css2?family=Space+Grotesk:wght@400;500;600;700&display=swap" rel="stylesheet">
+  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&display=swap" rel="stylesheet">
   <style type="text/tailwindcss">
     @theme {
-      --font-sans: 'Space Grotesk', ui-sans-serif, system-ui, -apple-system, sans-serif;
+      --font-sans: 'Inter', ui-sans-serif, system-ui, -apple-system, sans-serif;
     }
     [x-cloak] { display: none !important; }
   </style>
+  <style>
+    .glass { background: rgba(255,255,255,0.03); backdrop-filter: blur(20px); -webkit-backdrop-filter: blur(20px); }
+    .glass-light { background: rgba(255,255,255,0.6); backdrop-filter: blur(20px); -webkit-backdrop-filter: blur(20px); }
+    @media (prefers-color-scheme: light) { .glass { background: rgba(255,255,255,0.6); } }
+    .gradient-mesh { background: radial-gradient(ellipse 80% 60% at 50% -20%, rgba(120,119,198,0.15), transparent), radial-gradient(ellipse 60% 50% at 80% 50%, rgba(255,82,82,0.08), transparent); }
+    .gradient-mesh-light { background: radial-gradient(ellipse 80% 60% at 50% -20%, rgba(120,119,198,0.08), transparent), radial-gradient(ellipse 60% 50% at 80% 50%, rgba(255,82,82,0.04), transparent); }
+    .input-focus:focus { box-shadow: 0 0 0 2px rgba(239,68,68,0.2); }
+    .card-hover { transition: transform 0.15s ease, box-shadow 0.15s ease; }
+    .card-hover:hover { transform: translateY(-1px); box-shadow: 0 4px 12px rgba(0,0,0,0.08); }
+    html.dark .card-hover:hover { box-shadow: 0 4px 12px rgba(0,0,0,0.3); }
+    .fade-in { animation: fadeIn 0.3s ease-out; }
+    @keyframes fadeIn { from { opacity: 0; transform: translateY(8px); } to { opacity: 1; transform: translateY(0); } }
+    .pulse-dot { animation: pulse 2s infinite; }
+    @keyframes pulse { 0%,100% { opacity: 1; } 50% { opacity: 0.5; } }
+  </style>
   <script>
+  // Auto-detect light/dark
+  if (!window.matchMedia('(prefers-color-scheme: dark)').matches) {
+    document.documentElement.classList.remove('dark');
+  }
+
   document.addEventListener('alpine:init', () => {
     Alpine.data('setupApp', () => ({
       step: 1,
@@ -33,6 +53,9 @@
       slackBotToken: '',
       slackAppToken: '',
       model: '',
+      providerModels: {},
+      detectedProviders: [],
+      modelList: [],
       log: '',
       loading: false,
       pairingChannel: '',
@@ -49,17 +72,12 @@
         return this.authGroups.find(g => g.value === this.selectedGroup);
       },
 
-      async init() {
-        await this.refreshStatus();
-      },
+      async init() { await this.refreshStatus(); },
 
       async httpJson(url, opts = {}) {
         opts.credentials = 'same-origin';
         const res = await fetch(url, opts);
-        if (!res.ok) {
-          const t = await res.text();
-          throw new Error('HTTP ' + res.status + ': ' + (t || res.statusText));
-        }
+        if (!res.ok) { const t = await res.text(); throw new Error('HTTP ' + res.status + ': ' + (t || res.statusText)); }
         return res.json();
       },
 
@@ -70,18 +88,18 @@
           this.configured = j.configured;
           this.openclawVersion = j.openclawVersion || '';
           this.tuiEnabled = j.tuiEnabled || false;
-          this.status = j.configured ? 'Configured - open /openclaw' : 'Not configured - run setup below';
+          this.status = j.configured ? 'Running' : 'Setup required';
           this.authGroups = j.authGroups || [];
+          this.providerModels = j.providerModels || {};
+          this.detectedProviders = j.detectedProviders || [];
           if (this.authGroups.length > 0) {
             this.selectedGroup = this.authGroups[0].value;
             this.updateAuthChoices();
-          }
-          if (j.channelsAddHelp && j.channelsAddHelp.indexOf('telegram') === -1) {
-            this.log += '\nNote: this openclaw build does not list telegram in `channels add --help`. Telegram auto-add will be skipped.\n';
+            this.updateModelList();
           }
           this.isReady = true;
         } catch (e) {
-          this.status = 'Error: ' + String(e);
+          this.status = 'Error';
           this.isReady = true;
         }
       },
@@ -89,1069 +107,710 @@
       updateAuthChoices() {
         const group = this.currentGroup;
         this.authChoices = (group && group.options) ? group.options : [];
-        if (this.authChoices.length > 0) {
-          this.selectedAuth = this.authChoices[0].value;
+        if (this.authChoices.length > 0) this.selectedAuth = this.authChoices[0].value;
+        this.updateModelList();
+      },
+
+      updateModelList() {
+        const group = this.selectedGroup;
+        const models = this.providerModels[group] || [];
+        const detected = this.detectedProviders.includes(group);
+        this.modelList = models.map(m => ({ ...m, detected }));
+        if (this.modelList.length > 0 && !this.modelList.find(m => m.value === this.model)) {
+          this.model = this.modelList[0].value;
         }
       },
 
-      nextStep() {
-        if (this.step < this.totalSteps) this.step++;
-      },
-
-      prevStep() {
-        if (this.step > 1) this.step--;
-      },
+      nextStep() { if (this.step < this.totalSteps) this.step++; },
+      prevStep() { if (this.step > 1) this.step--; },
 
       async runSetup() {
         const payload = {
-          flow: this.flow,
-          authChoice: this.selectedAuth,
-          authSecret: this.authSecret,
-          model: this.model,
-          telegramToken: this.telegramToken,
-          discordToken: this.discordToken,
-          slackBotToken: this.slackBotToken,
-          slackAppToken: this.slackAppToken
+          flow: this.flow, authChoice: this.selectedAuth, authSecret: this.authSecret,
+          model: this.model, telegramToken: this.telegramToken, discordToken: this.discordToken,
+          slackBotToken: this.slackBotToken, slackAppToken: this.slackAppToken
         };
-
-        this.log = 'Running...\n';
+        this.log = 'Running setup...\n';
         this.loading = true;
-
         try {
-          const res = await fetch('/setup/api/run', {
-            method: 'POST',
-            credentials: 'same-origin',
-            headers: { 'content-type': 'application/json' },
-            body: JSON.stringify(payload)
-          });
+          const res = await fetch('/setup/api/run', { method: 'POST', credentials: 'same-origin', headers: { 'content-type': 'application/json' }, body: JSON.stringify(payload) });
           const text = await res.text();
-          let j;
-          try { j = JSON.parse(text); } catch (_e) { j = { ok: false, output: text }; }
+          let j; try { j = JSON.parse(text); } catch (_e) { j = { ok: false, output: text }; }
           this.log += (j.output || JSON.stringify(j, null, 2));
           await this.refreshStatus();
-        } catch (e) {
-          this.log += '\nError: ' + String(e) + '\n';
-        } finally {
-          this.loading = false;
-        }
+        } catch (e) { this.log += '\nError: ' + String(e) + '\n'; } finally { this.loading = false; }
       },
 
-      openPairingModal() {
-        this.pairingChannel = '';
-        this.pairingCode = '';
-        this.showPairingModal = true;
-      },
+      openPairingModal() { this.pairingChannel = ''; this.pairingCode = ''; this.showPairingModal = true; },
 
       async approvePairing() {
         const channel = this.pairingChannel.trim().toLowerCase();
-        if (channel !== 'telegram' && channel !== 'discord') {
-          alert('Channel must be "telegram" or "discord"');
-          return;
-        }
+        if (channel !== 'telegram' && channel !== 'discord') { alert('Channel must be "telegram" or "discord"'); return; }
         const code = this.pairingCode.trim();
-        if (!code) {
-          alert('Please enter a pairing code');
-          return;
-        }
+        if (!code) { alert('Please enter a pairing code'); return; }
         this.showPairingModal = false;
         this.log += '\nApproving pairing for ' + channel + '...\n';
-
         try {
-          const res = await fetch('/setup/api/pairing/approve', {
-            method: 'POST',
-            credentials: 'same-origin',
-            headers: { 'content-type': 'application/json' },
-            body: JSON.stringify({ channel: channel, code: code })
-          });
+          const res = await fetch('/setup/api/pairing/approve', { method: 'POST', credentials: 'same-origin', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ channel, code }) });
           const t = await res.text();
-          let result;
-          try { result = JSON.parse(t); } catch (_e) { result = { ok: false, output: t }; }
-          if (result.ok) {
-            const msg = result.output || 'Pairing approved successfully';
-            this.log += '✓ ' + msg + '\n';
-            alert('✓ ' + msg.trim());
-          } else {
-            const msg = result.output || result.error || 'Unknown error';
-            this.log += '✗ Failed: ' + msg + '\n';
-            alert('✗ Pairing failed: ' + msg.trim());
-          }
-        } catch (e) {
-          this.log += '✗ Error: ' + String(e) + '\n';
-          alert('✗ Pairing failed: ' + String(e));
-        }
+          let result; try { result = JSON.parse(t); } catch (_e) { result = { ok: false, output: t }; }
+          this.log += result.ok ? ('Done: ' + (result.output || 'Approved') + '\n') : ('Failed: ' + (result.output || result.error || 'Unknown error') + '\n');
+        } catch (e) { this.log += 'Error: ' + String(e) + '\n'; }
       },
 
-      async openDevicesModal() {
-        this.showDevicesModal = true;
-        await this.loadDevices();
-      },
+      async openDevicesModal() { this.showDevicesModal = true; await this.loadDevices(); },
 
       async loadDevices() {
         this.devicesLoading = true;
         try {
           const j = await this.httpJson('/setup/api/devices');
           const d = j.data;
-          if (Array.isArray(d)) {
-            this.devicesPending = d.filter(x => x.status === 'pending');
-            this.devicesPaired = d.filter(x => x.status !== 'pending');
-          } else if (d && typeof d === 'object') {
-            this.devicesPending = d.pending || d.pendingRequests || d.requests || [];
-            this.devicesPaired = d.paired || d.devices || d.approved || [];
-          } else {
-            this.devicesPending = [];
-            this.devicesPaired = [];
-          }
-          if (j.raw) {
-            this.log += '[devices] ' + j.raw.trim() + '\n';
-          }
-        } catch (e) {
-          this.log += '✗ Failed to load devices: ' + String(e) + '\n';
-        } finally {
-          this.devicesLoading = false;
-        }
+          if (Array.isArray(d)) { this.devicesPending = d.filter(x => x.status === 'pending'); this.devicesPaired = d.filter(x => x.status !== 'pending'); }
+          else if (d && typeof d === 'object') { this.devicesPending = d.pending || d.pendingRequests || d.requests || []; this.devicesPaired = d.paired || d.devices || d.approved || []; }
+          else { this.devicesPending = []; this.devicesPaired = []; }
+        } catch (e) { this.log += 'Failed to load devices: ' + String(e) + '\n'; } finally { this.devicesLoading = false; }
       },
 
       async approveDevice(requestId) {
         this.devicesLoading = true;
         try {
-          const res = await fetch('/setup/api/devices/approve', {
-            method: 'POST',
-            credentials: 'same-origin',
-            headers: { 'content-type': 'application/json' },
-            body: JSON.stringify(requestId ? { requestId } : {})
-          });
+          const res = await fetch('/setup/api/devices/approve', { method: 'POST', credentials: 'same-origin', headers: { 'content-type': 'application/json' }, body: JSON.stringify(requestId ? { requestId } : {}) });
           const t = await res.text();
-          let j;
-          try { j = JSON.parse(t); } catch (_e) { j = { ok: false, output: t }; }
-          if (j.ok) {
-            this.log += '✓ Device approved\n';
-          } else {
-            this.log += '✗ Approve failed: ' + (j.output || j.error || 'Unknown error') + '\n';
-          }
+          let j; try { j = JSON.parse(t); } catch (_e) { j = { ok: false, output: t }; }
+          this.log += j.ok ? 'Device approved\n' : ('Approve failed: ' + (j.output || j.error || 'Unknown error') + '\n');
           await this.loadDevices();
-        } catch (e) {
-          this.log += '✗ Error: ' + String(e) + '\n';
-          this.devicesLoading = false;
-        }
+        } catch (e) { this.log += 'Error: ' + String(e) + '\n'; this.devicesLoading = false; }
       },
 
       async resetSetup() {
-        if (!confirm('Reset setup? This deletes the config file so onboarding can run again.')) return;
-        this.log = 'Resetting...\n';
-        this.loading = true;
-
+        if (!confirm('Reset setup? This deletes the config file so you can run onboarding again.')) return;
+        this.log = 'Resetting...\n'; this.loading = true;
         try {
           const res = await fetch('/setup/api/reset', { method: 'POST', credentials: 'same-origin' });
-          const t = await res.text();
-          this.log += t + '\n';
+          this.log += (await res.text()) + '\n';
           await this.refreshStatus();
-        } catch (e) {
-          this.log += 'Error: ' + String(e) + '\n';
-        } finally {
-          this.loading = false;
-        }
+        } catch (e) { this.log += 'Error: ' + String(e) + '\n'; } finally { this.loading = false; }
       },
 
-      // Multi-model configuration state
-      showModelsModal: false,
-      modelsLoading: false,
-      primaryModel: '',
-      fallbackModel: '',
-      customProviders: [],
-      currentModelsRaw: '',
+      showModelsModal: false, modelsLoading: false, primaryModel: '', fallbackModel: '', customProviders: [], currentModelsRaw: '',
 
       async openModelsModal() {
-        this.showModelsModal = true;
-        this.modelsLoading = true;
-        try {
-          const j = await this.httpJson('/setup/api/models');
-          this.currentModelsRaw = j.raw || JSON.stringify(j.models, null, 2) || '';
-        } catch (e) {
-          this.currentModelsRaw = 'Error loading models: ' + String(e);
-        } finally {
-          this.modelsLoading = false;
-        }
+        this.showModelsModal = true; this.modelsLoading = true;
+        try { const j = await this.httpJson('/setup/api/models'); this.currentModelsRaw = j.raw || JSON.stringify(j.models, null, 2) || ''; }
+        catch (e) { this.currentModelsRaw = 'Error: ' + String(e); } finally { this.modelsLoading = false; }
       },
-
-      addCustomProvider() {
-        this.customProviders.push({ id: '', baseUrl: '', apiKeyEnvVar: '', models: '' });
-      },
-
-      removeCustomProvider(idx) {
-        this.customProviders.splice(idx, 1);
-      },
-
+      addCustomProvider() { this.customProviders.push({ id: '', baseUrl: '', apiKeyEnvVar: '', models: '' }); },
+      removeCustomProvider(idx) { this.customProviders.splice(idx, 1); },
       async saveModels() {
-        this.modelsLoading = true;
-        this.log += '\nConfiguring models...\n';
+        this.modelsLoading = true; this.log += '\nConfiguring models...\n';
         try {
-          const res = await fetch('/setup/api/models', {
-            method: 'POST',
-            credentials: 'same-origin',
-            headers: { 'content-type': 'application/json' },
-            body: JSON.stringify({
-              primaryModel: this.primaryModel,
-              fallbackModel: this.fallbackModel,
-              customProviders: this.customProviders.filter(p => p.id && p.baseUrl)
-            })
-          });
-          const t = await res.text();
-          let j;
-          try { j = JSON.parse(t); } catch (_e) { j = { ok: false, output: t }; }
+          const res = await fetch('/setup/api/models', { method: 'POST', credentials: 'same-origin', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ primaryModel: this.primaryModel, fallbackModel: this.fallbackModel, customProviders: this.customProviders.filter(p => p.id && p.baseUrl) }) });
+          const t = await res.text(); let j; try { j = JSON.parse(t); } catch (_e) { j = { ok: false, output: t }; }
           this.log += (j.output || JSON.stringify(j, null, 2)) + '\n';
-          if (j.ok) {
-            this.log += '✓ Model configuration saved\n';
-          }
-          // Refresh current config
-          try {
-            const m = await this.httpJson('/setup/api/models');
-            this.currentModelsRaw = m.raw || JSON.stringify(m.models, null, 2) || '';
-          } catch {}
-        } catch (e) {
-          this.log += '✗ Error: ' + String(e) + '\n';
-        } finally {
-          this.modelsLoading = false;
-        }
+          try { const m = await this.httpJson('/setup/api/models'); this.currentModelsRaw = m.raw || JSON.stringify(m.models, null, 2) || ''; } catch {}
+        } catch (e) { this.log += 'Error: ' + String(e) + '\n'; } finally { this.modelsLoading = false; }
       },
 
       async runDoctor() {
-        this.log = 'Running doctor...\n';
-        this.loading = true;
-
+        this.log = 'Running doctor...\n'; this.loading = true;
         try {
-          const res = await fetch('/setup/api/doctor', {
-            method: 'POST',
-            credentials: 'same-origin',
-            headers: { 'content-type': 'application/json' }
-          });
-          const text = await res.text();
-          let j;
-          try { j = JSON.parse(text); } catch (_e) { j = { ok: false, output: text }; }
+          const res = await fetch('/setup/api/doctor', { method: 'POST', credentials: 'same-origin', headers: { 'content-type': 'application/json' } });
+          const text = await res.text(); let j; try { j = JSON.parse(text); } catch (_e) { j = { ok: false, output: text }; }
           this.log += (j.output || JSON.stringify(j, null, 2));
-          if (j.ok) {
-            this.log += '\n✓ Doctor completed successfully\n';
-          } else {
-            this.log += '\n✗ Doctor found issues\n';
-          }
-        } catch (e) {
-          this.log += 'Error: ' + String(e) + '\n';
-        } finally {
-          this.loading = false;
-        }
+          this.log += j.ok ? '\nDoctor completed successfully\n' : '\nDoctor found issues\n';
+        } catch (e) { this.log += 'Error: ' + String(e) + '\n'; } finally { this.loading = false; }
       },
 
       async importBackup(event) {
-        const file = event.target.files[0];
-        if (!file) return;
-        if (!confirm('Import backup will replace current config and workspace. Continue?')) {
-          event.target.value = '';
-          return;
-        }
-        this.log = 'Importing backup: ' + file.name + ' (' + (file.size / 1024 / 1024).toFixed(1) + ' MB)...\n';
-        this.loading = true;
+        const file = event.target.files[0]; if (!file) return;
+        if (!confirm('Import backup will replace current config. Continue?')) { event.target.value = ''; return; }
+        this.log = 'Importing: ' + file.name + '...\n'; this.loading = true;
         try {
-          const res = await fetch('/setup/import', {
-            method: 'POST',
-            credentials: 'same-origin',
-            headers: { 'content-type': 'application/gzip' },
-            body: file
-          });
-          const text = await res.text();
-          let j;
-          try { j = JSON.parse(text); } catch (_e) { j = { ok: false, output: text }; }
-          if (j.ok) {
-            this.log += '✓ Backup imported successfully\n';
-            if (j.output) this.log += j.output + '\n';
-            await this.refreshStatus();
-          } else {
-            this.log += '✗ Import failed: ' + (j.error || j.output || 'Unknown error') + '\n';
-          }
-        } catch (e) {
-          this.log += '✗ Import error: ' + String(e) + '\n';
-        } finally {
-          this.loading = false;
-          event.target.value = '';
-        }
+          const res = await fetch('/setup/import', { method: 'POST', credentials: 'same-origin', headers: { 'content-type': 'application/gzip' }, body: file });
+          const text = await res.text(); let j; try { j = JSON.parse(text); } catch (_e) { j = { ok: false, output: text }; }
+          this.log += j.ok ? 'Backup imported\n' : ('Import failed: ' + (j.error || j.output || 'Unknown') + '\n');
+          if (j.ok) await this.refreshStatus();
+        } catch (e) { this.log += 'Import error: ' + String(e) + '\n'; } finally { this.loading = false; event.target.value = ''; }
       },
 
-      // ========== AGENT SWARM STATE & METHODS ==========
-      showSwarmModal: false,
-      swarmLoading: false,
-      swarmTemplates: [],
-      swarmSelectedTemplate: '',
-      swarmTask: '',
-      swarmActiveList: [],
-      swarmHistory: [],
-      swarmStats: null,
-      swarmDetailId: null,
-      swarmDetail: null,
-
+      showSwarmModal: false, swarmLoading: false, swarmTemplates: [], swarmSelectedTemplate: '', swarmTask: '', swarmActiveList: [], swarmHistory: [], swarmStats: null, swarmDetailId: null, swarmDetail: null,
       async openSwarmModal() {
-        this.showSwarmModal = true;
-        this.swarmLoading = true;
-        this.swarmDetailId = null;
-        this.swarmDetail = null;
+        this.showSwarmModal = true; this.swarmLoading = true; this.swarmDetailId = null; this.swarmDetail = null;
         try {
-          const [tmpl, swarms] = await Promise.all([
-            this.httpJson('/setup/api/swarms/templates'),
-            this.httpJson('/setup/api/swarms'),
-          ]);
+          const [tmpl, swarms] = await Promise.all([this.httpJson('/setup/api/swarms/templates'), this.httpJson('/setup/api/swarms')]);
           this.swarmTemplates = tmpl.templates || [];
-          if (this.swarmTemplates.length > 0 && !this.swarmSelectedTemplate) {
-            this.swarmSelectedTemplate = this.swarmTemplates[0].id;
-          }
+          if (this.swarmTemplates.length > 0 && !this.swarmSelectedTemplate) this.swarmSelectedTemplate = this.swarmTemplates[0].id;
           this.swarmActiveList = (swarms.swarms || []).filter(s => s.status === 'running');
           this.swarmHistory = (swarms.swarms || []).filter(s => s.status !== 'running').slice(0, 10);
           this.swarmStats = swarms.stats || null;
-        } catch (e) {
-          this.log += '✗ Failed to load swarm data: ' + String(e) + '\n';
-        } finally {
-          this.swarmLoading = false;
-        }
+        } catch (e) { this.log += 'Failed to load swarm data: ' + String(e) + '\n'; } finally { this.swarmLoading = false; }
       },
-
       async spawnSwarm() {
-        if (!this.swarmSelectedTemplate || !this.swarmTask.trim()) {
-          alert('Select a template and describe the task');
-          return;
-        }
+        if (!this.swarmSelectedTemplate || !this.swarmTask.trim()) { alert('Select a template and describe the task'); return; }
         this.swarmLoading = true;
-        this.log += '\nSpawning swarm (' + this.swarmSelectedTemplate + ')...\n';
         try {
-          const res = await fetch('/setup/api/swarms/spawn', {
-            method: 'POST',
-            credentials: 'same-origin',
-            headers: { 'content-type': 'application/json' },
-            body: JSON.stringify({
-              templateId: this.swarmSelectedTemplate,
-              task: this.swarmTask.trim()
-            })
-          });
+          const res = await fetch('/setup/api/swarms/spawn', { method: 'POST', credentials: 'same-origin', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ templateId: this.swarmSelectedTemplate, task: this.swarmTask.trim() }) });
           const j = await res.json();
-          if (j.ok) {
-            this.log += '✓ Swarm spawned: ' + j.swarmId + ' (' + j.templateName + ', ' + j.strategy + ', ' + j.steps + ' steps)\n';
-            this.swarmTask = '';
-            await this.openSwarmModal(); // refresh lists
-          } else {
-            this.log += '✗ Swarm failed: ' + (j.error || 'Unknown error') + '\n';
-            alert('Failed to spawn swarm: ' + (j.error || 'Unknown error'));
-          }
-        } catch (e) {
-          this.log += '✗ Error: ' + String(e) + '\n';
-        } finally {
-          this.swarmLoading = false;
-        }
+          if (j.ok) { this.log += 'Swarm spawned: ' + j.swarmId + '\n'; this.swarmTask = ''; await this.openSwarmModal(); }
+          else { this.log += 'Swarm failed: ' + (j.error || 'Unknown') + '\n'; }
+        } catch (e) { this.log += 'Error: ' + String(e) + '\n'; } finally { this.swarmLoading = false; }
       },
-
       async cancelSwarm(swarmId) {
         if (!confirm('Cancel this running swarm?')) return;
-        try {
-          const res = await fetch('/setup/api/swarms/' + encodeURIComponent(swarmId) + '/cancel', {
-            method: 'POST',
-            credentials: 'same-origin',
-          });
-          const j = await res.json();
-          if (j.ok) {
-            this.log += '✓ Swarm ' + swarmId + ' cancelled\n';
-            await this.openSwarmModal();
-          } else {
-            this.log += '✗ Cancel failed: ' + (j.error || 'Unknown') + '\n';
-          }
-        } catch (e) {
-          this.log += '✗ Error: ' + String(e) + '\n';
-        }
+        try { const res = await fetch('/setup/api/swarms/' + encodeURIComponent(swarmId) + '/cancel', { method: 'POST', credentials: 'same-origin' }); const j = await res.json(); if (j.ok) { this.log += 'Swarm cancelled\n'; await this.openSwarmModal(); } } catch (e) { this.log += 'Error: ' + String(e) + '\n'; }
       },
-
       async viewSwarmDetail(swarmId) {
-        this.swarmDetailId = swarmId;
-        this.swarmLoading = true;
-        try {
-          const j = await this.httpJson('/setup/api/swarms/' + encodeURIComponent(swarmId));
-          this.swarmDetail = j.swarm || null;
-        } catch (e) {
-          this.log += '✗ Failed to load swarm detail: ' + String(e) + '\n';
-        } finally {
-          this.swarmLoading = false;
-        }
+        this.swarmDetailId = swarmId; this.swarmLoading = true;
+        try { const j = await this.httpJson('/setup/api/swarms/' + encodeURIComponent(swarmId)); this.swarmDetail = j.swarm || null; } catch (e) { this.log += 'Error: ' + String(e) + '\n'; } finally { this.swarmLoading = false; }
       },
-
-      swarmStrategyIcon(strategy) {
-        const icons = { pipeline: '→', parallel: '⇉', sequential: '↓', debate: '⇄' };
-        return icons[strategy] || '?';
-      },
-
-      swarmStatusColor(status) {
-        const map = { running: 'text-blue-400', completed: 'text-emerald-400', failed: 'text-red-400', cancelled: 'text-neutral-500', pending: 'text-yellow-400' };
-        return map[status] || 'text-neutral-400';
-      }
+      swarmStatusColor(status) { return { running: 'text-blue-400', completed: 'text-emerald-400', failed: 'text-red-400', cancelled: 'text-neutral-500', pending: 'text-yellow-400' }[status] || 'text-neutral-400'; }
     }));
   });
   </script>
   <script defer src="https://cdn.jsdelivr.net/npm/alpinejs@3.14.8/dist/cdn.min.js"></script>
 </head>
-<body class="bg-neutral-100 dark:bg-neutral-950 text-neutral-900 dark:text-neutral-100 min-h-screen font-sans" x-data="setupApp()">
-  <!-- Top Navigation Bar -->
-  <nav class="border-b border-neutral-200 dark:border-neutral-800 bg-white/80 dark:bg-neutral-900/80 backdrop-blur-md sticky top-0 z-40">
-    <div class="max-w-4xl mx-auto px-4 flex items-center justify-between h-14">
-      <div class="flex items-center gap-2">
-        <svg class="w-7 h-7" viewBox="0 0 64 64" fill="none" xmlns="http://www.w3.org/2000/svg">
-          <circle cx="32" cy="32" r="30" fill="url(#oc-grad)" />
-          <path d="M20 38c2-6 6-12 12-14s10 2 12 8c1 4-1 8-4 10s-8 2-12-1c-3-2-5-5-4-8" stroke="#fff" stroke-width="2.5" stroke-linecap="round" fill="none" opacity=".9"/>
-          <circle cx="35" cy="28" r="2.5" fill="#fff" opacity=".85"/>
-          <path d="M26 22c-3-6-1-10 2-11M38 20c2-7 6-9 9-7" stroke="#fff" stroke-width="2" stroke-linecap="round" opacity=".7"/>
-          <defs><linearGradient id="oc-grad" x1="0" y1="0" x2="64" y2="64"><stop stop-color="#ef4444"/><stop offset="1" stop-color="#dc2626"/></linearGradient></defs>
-        </svg>
-        <span class="font-bold text-lg tracking-tight">OpenClaw</span>
+<body class="bg-[#0a0a0f] dark:bg-[#0a0a0f] bg-white text-neutral-900 dark:text-neutral-100 min-h-screen font-sans gradient-mesh-light dark:gradient-mesh" x-data="setupApp()">
+
+  <!-- Navbar -->
+  <nav class="border-b border-neutral-200/80 dark:border-white/[0.06] bg-white/70 dark:bg-white/[0.02] backdrop-blur-xl sticky top-0 z-40">
+    <div class="max-w-5xl mx-auto px-6 flex items-center justify-between h-14">
+      <div class="flex items-center gap-2.5">
+        <div class="w-8 h-8 rounded-lg bg-gradient-to-br from-red-500 to-red-600 flex items-center justify-center shadow-lg shadow-red-500/20">
+          <svg class="w-4.5 h-4.5 text-white" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round"><path d="M12 2L2 7l10 5 10-5-10-5z"/><path d="M2 17l10 5 10-5"/><path d="M2 12l10 5 10-5"/></svg>
+        </div>
+        <span class="font-bold text-base tracking-tight">OpenClaw</span>
+        <span x-show="openclawVersion" x-text="openclawVersion" class="text-[10px] bg-neutral-100 dark:bg-white/[0.06] text-neutral-500 dark:text-neutral-500 px-1.5 py-0.5 rounded font-mono"></span>
       </div>
-      <div class="flex items-center gap-1">
-        <a href="/dashboard" class="text-sm text-neutral-500 hover:text-neutral-900 dark:hover:text-neutral-200 px-3 py-1.5 rounded-lg hover:bg-neutral-100 dark:hover:bg-neutral-800 transition-colors">Dashboard</a>
-        <a href="/openclaw" target="_blank" x-show="configured" class="text-sm text-neutral-500 hover:text-neutral-900 dark:hover:text-neutral-200 px-3 py-1.5 rounded-lg hover:bg-neutral-100 dark:hover:bg-neutral-800 transition-colors">Open UI</a>
-        <a x-show="tuiEnabled" href="/tui" target="_blank" class="text-sm text-neutral-500 hover:text-neutral-900 dark:hover:text-neutral-200 px-3 py-1.5 rounded-lg hover:bg-neutral-100 dark:hover:bg-neutral-800 transition-colors">Terminal</a>
-        <a href="/healthz" target="_blank" class="text-sm text-neutral-500 hover:text-neutral-900 dark:hover:text-neutral-200 px-3 py-1.5 rounded-lg hover:bg-neutral-100 dark:hover:bg-neutral-800 transition-colors">Health</a>
-        <div class="w-px h-5 bg-neutral-200 dark:bg-neutral-800 mx-1"></div>
-        <a href="/setup/logout" class="text-sm text-red-500/70 hover:text-red-500 px-3 py-1.5 rounded-lg hover:bg-red-50 dark:hover:bg-red-900/20 transition-colors">Sign Out</a>
+      <div class="flex items-center gap-1 text-[13px]">
+        <a href="/openclaw" target="_blank" x-show="configured" class="text-neutral-500 hover:text-neutral-900 dark:hover:text-white px-2.5 py-1.5 rounded-md hover:bg-neutral-100 dark:hover:bg-white/[0.06] transition-colors">Open UI</a>
+        <a x-show="tuiEnabled" href="/tui" target="_blank" class="text-neutral-500 hover:text-neutral-900 dark:hover:text-white px-2.5 py-1.5 rounded-md hover:bg-neutral-100 dark:hover:bg-white/[0.06] transition-colors">Terminal</a>
+        <a href="/healthz" target="_blank" class="text-neutral-500 hover:text-neutral-900 dark:hover:text-white px-2.5 py-1.5 rounded-md hover:bg-neutral-100 dark:hover:bg-white/[0.06] transition-colors">Health</a>
       </div>
     </div>
   </nav>
 
-  <div class="max-w-4xl mx-auto px-4 py-10 min-w-[400px]">
-    <div class="text-center mb-10">
-      <h1 class="text-3xl font-bold tracking-tight mb-2">Personal AI Assistant</h1>
-      <p class="text-neutral-500 text-sm">Configure and manage your OpenClaw instance</p>
-    </div>
+  <div class="max-w-5xl mx-auto px-6 py-10">
 
-    <!-- Status Banner -->
-    <div class="bg-white dark:bg-neutral-900 border border-neutral-200 dark:border-neutral-800 rounded-xl p-5 mb-6 shadow-sm dark:shadow-none">
-      <div class="flex items-center justify-between">
-        <div class="flex items-center gap-3">
-          <span class="relative flex h-3 w-3">
-            <span class="absolute inline-flex h-full w-full rounded-full opacity-75 animate-ping" :class="configured ? 'bg-emerald-400' : 'bg-amber-400'"></span>
-            <span class="relative inline-flex rounded-full h-3 w-3" :class="configured ? 'bg-emerald-500' : 'bg-amber-500'"></span>
-          </span>
-          <div>
-            <span x-text="status" class="text-sm font-medium" :class="configured ? 'text-emerald-700 dark:text-emerald-400' : 'text-amber-700 dark:text-amber-400'"></span>
-            <span x-show="openclawVersion" x-text="'v' + openclawVersion" class="text-xs text-neutral-400 dark:text-neutral-600 ml-2"></span>
-          </div>
-        </div>
-        <div x-show="configured" class="flex items-center gap-2">
-          <a href="/dashboard" class="inline-flex items-center gap-1.5 text-xs bg-purple-100 dark:bg-purple-500/20 text-purple-700 dark:text-purple-300 px-3 py-1.5 rounded-lg hover:bg-purple-200 dark:hover:bg-purple-500/30 transition-colors font-medium">
-            <svg class="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 19v-6a2 2 0 00-2-2H5a2 2 0 00-2 2v6a2 2 0 002 2h2a2 2 0 002-2zm0 0V9a2 2 0 012-2h2a2 2 0 012 2v10m-6 0a2 2 0 002 2h2a2 2 0 002-2m0 0V5a2 2 0 012-2h2a2 2 0 012 2v14a2 2 0 01-2 2h-2a2 2 0 01-2-2z"/></svg>
-            Dashboard
-          </a>
-          <a href="/openclaw" target="_blank" class="inline-flex items-center gap-1.5 text-xs bg-teal-100 dark:bg-teal-500/20 text-teal-700 dark:text-teal-300 px-3 py-1.5 rounded-lg hover:bg-teal-200 dark:hover:bg-teal-500/30 transition-colors font-medium">
-            <svg class="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M10 6H6a2 2 0 00-2 2v10a2 2 0 002 2h10a2 2 0 002-2v-4M14 4h6m0 0v6m0-6L10 14"/></svg>
-            Open UI
-          </a>
-        </div>
+    <!-- Status Pill -->
+    <div class="flex items-center justify-center mb-10 fade-in">
+      <div class="inline-flex items-center gap-2.5 bg-white dark:bg-white/[0.04] border border-neutral-200 dark:border-white/[0.08] rounded-full px-5 py-2.5 shadow-sm">
+        <span class="relative flex h-2.5 w-2.5">
+          <span class="absolute inline-flex h-full w-full rounded-full opacity-75 animate-ping" :class="configured ? 'bg-emerald-400' : 'bg-amber-400'"></span>
+          <span class="relative inline-flex rounded-full h-2.5 w-2.5" :class="configured ? 'bg-emerald-500' : 'bg-amber-500'"></span>
+        </span>
+        <span class="text-sm font-medium" :class="configured ? 'text-emerald-600 dark:text-emerald-400' : 'text-amber-600 dark:text-amber-400'" x-text="status"></span>
       </div>
     </div>
 
-    <div x-show="isReady && configured" x-cloak>
-      <div class="bg-white dark:bg-neutral-900 border border-neutral-200 dark:border-neutral-800 rounded-xl p-6 shadow-sm dark:shadow-none mb-6">
-        <h2 class="text-lg font-semibold mb-1">Quick Actions</h2>
-        <p class="text-neutral-500 text-sm mb-6">Manage your running OpenClaw instance</p>
+    <!-- ============ CONFIGURED STATE ============ -->
+    <div x-show="isReady && configured" x-cloak class="fade-in">
 
-        <div class="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-4 mb-6">
-          <div class="flex flex-col bg-amber-50 dark:bg-amber-900/20 rounded-xl p-4 border border-amber-200 dark:border-amber-800">
-            <div class="flex items-center gap-3 mb-3">
-              <div class="w-10 h-10 bg-amber-500/20 rounded-lg flex items-center justify-center">
-                <svg class="w-5 h-5 text-amber-600 dark:text-amber-400" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M10.325 4.317c.426-1.756 2.924-1.756 3.35 0a1.724 1.724 0 002.573 1.066c1.543-.94 3.31.826 2.37 2.37a1.724 1.724 0 001.065 2.572c1.756.426 1.756 2.924 0 3.35a1.724 1.724 0 00-1.066 2.573c.94 1.543-.826 3.31-2.37 2.37a1.724 1.724 0 00-2.572 1.065c-.426 1.756-2.924 1.756-3.35 0a1.724 1.724 0 00-2.573-1.066c-1.543.94-3.31-.826-2.37-2.37a1.724 1.724 0 00-1.065-2.572c-1.756-.426-1.756-2.924 0-3.35a1.724 1.724 0 001.066-2.573c-.94-1.543.826-3.31 2.37-2.37.996.608 2.296.07 2.572-1.065z"/><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M15 12a3 3 0 11-6 0 3 3 0 016 0z"/></svg>
-              </div>
-              <span class="font-medium text-amber-700 dark:text-amber-300">Run Doctor</span>
-            </div>
-            <p class="text-sm text-amber-600/80 dark:text-amber-400/70 flex-1">Performs health checks and repairs broken configuration. Creates a backup before making changes.</p>
-            <button @click="runDoctor()" :disabled="loading" class="w-full mt-4 bg-amber-100 dark:bg-amber-900/40 hover:bg-amber-200 dark:hover:bg-amber-900/60 disabled:opacity-50 disabled:cursor-not-allowed text-amber-700 dark:text-amber-300 px-4 py-2.5 rounded-lg font-medium border border-amber-300 dark:border-amber-700 transition-colors">
-              <span x-show="!loading">Run Doctor</span>
-              <span x-show="loading" class="flex items-center justify-center gap-2">
-                <svg class="animate-spin w-4 h-4" fill="none" viewBox="0 0 24 24"><circle class="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" stroke-width="4"/><path class="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4z"/></svg>
-                Running...
-              </span>
-            </button>
-          </div>
-
-          <div class="flex flex-col bg-blue-50 dark:bg-blue-900/20 rounded-xl p-4 border border-blue-200 dark:border-blue-800">
-            <div class="flex items-center gap-3 mb-3">
-              <div class="w-10 h-10 bg-blue-500/20 rounded-lg flex items-center justify-center">
-                <svg class="w-5 h-5 text-blue-600 dark:text-blue-400" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M13.828 10.172a4 4 0 00-5.656 0l-4 4a4 4 0 105.656 5.656l1.102-1.101m-.758-4.899a4 4 0 005.656 0l4-4a4 4 0 00-5.656-5.656l-1.1 1.1"/></svg>
-              </div>
-              <span class="font-medium text-blue-700 dark:text-blue-300">Approve Pairing</span>
-            </div>
-            <p class="text-sm text-blue-600/80 dark:text-blue-400/70 flex-1">Approve first-time Control UI devices and channel pairing requests.</p>
-            <div class="mt-4 space-y-2">
-              <button @click="openDevicesModal()" :disabled="loading" class="w-full bg-blue-600 hover:bg-blue-700 disabled:opacity-50 disabled:cursor-not-allowed text-white px-4 py-2.5 rounded-lg font-medium border border-blue-700 transition-colors">
-                Manage Devices
-              </button>
-              <button @click="openPairingModal()" :disabled="loading" class="w-full bg-blue-100 dark:bg-blue-900/40 hover:bg-blue-200 dark:hover:bg-blue-900/60 disabled:opacity-50 disabled:cursor-not-allowed text-blue-700 dark:text-blue-300 px-4 py-2.5 rounded-lg font-medium border border-blue-300 dark:border-blue-700 transition-colors">
-                Approve Channel Pairing
-              </button>
-            </div>
-          </div>
-
-          <div class="flex flex-col bg-purple-50 dark:bg-purple-900/20 rounded-xl p-4 border border-purple-200 dark:border-purple-800">
-            <div class="flex items-center gap-3 mb-3">
-              <div class="w-10 h-10 bg-purple-500/20 rounded-lg flex items-center justify-center">
-                <svg class="w-5 h-5 text-purple-600 dark:text-purple-400" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9.75 17L9 20l-1 1h8l-1-1-.75-3M3 13h18M5 17h14a2 2 0 002-2V5a2 2 0 00-2-2H5a2 2 0 00-2 2v10a2 2 0 002 2z"/></svg>
-              </div>
-              <span class="font-medium text-purple-700 dark:text-purple-300">Model Config</span>
-            </div>
-            <p class="text-sm text-purple-600/80 dark:text-purple-400/70 flex-1">Configure multiple AI models for cost efficiency — use cheaper models for simple tasks.</p>
-            <button @click="openModelsModal()" :disabled="loading" class="w-full mt-4 bg-purple-100 dark:bg-purple-900/40 hover:bg-purple-200 dark:hover:bg-purple-900/60 disabled:opacity-50 disabled:cursor-not-allowed text-purple-700 dark:text-purple-300 px-4 py-2.5 rounded-lg font-medium border border-purple-300 dark:border-purple-700 transition-colors">
-              Configure Models
-            </button>
-          </div>
-
-          <div class="flex flex-col bg-red-50 dark:bg-red-900/20 rounded-xl p-4 border border-red-200 dark:border-red-800">
-            <div class="flex items-center gap-3 mb-3">
-              <div class="w-10 h-10 bg-red-500/20 rounded-lg flex items-center justify-center">
-                <svg class="w-5 h-5 text-red-600 dark:text-red-400" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M19 7l-.867 12.142A2 2 0 0116.138 21H7.862a2 2 0 01-1.995-1.858L5 7m5 4v6m4-6v6m1-10V4a1 1 0 00-1-1h-4a1 1 0 00-1 1v3M4 7h16"/></svg>
-              </div>
-              <span class="font-medium text-red-700 dark:text-red-300">Reset Setup</span>
-            </div>
-            <p class="text-sm text-red-600/80 dark:text-red-400/70 flex-1">Deletes the config file so you can run onboarding again from scratch.</p>
-            <button @click="resetSetup()" :disabled="loading" class="w-full mt-4 bg-red-100 dark:bg-red-900/40 hover:bg-red-200 dark:hover:bg-red-900/60 disabled:opacity-50 disabled:cursor-not-allowed text-red-700 dark:text-red-300 px-4 py-2.5 rounded-lg font-medium border border-red-300 dark:border-red-700 transition-colors">
-              Reset Setup
-            </button>
-          </div>
-
-          <div class="flex flex-col bg-orange-50 dark:bg-orange-900/20 rounded-xl p-4 border border-orange-200 dark:border-orange-800">
-            <div class="flex items-center gap-3 mb-3">
-              <div class="w-10 h-10 bg-orange-500/20 rounded-lg flex items-center justify-center">
-                <svg class="w-5 h-5 text-orange-600 dark:text-orange-400" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M17 20h5v-2a3 3 0 00-5.356-1.857M17 20H7m10 0v-2c0-.656-.126-1.283-.356-1.857M7 20H2v-2a3 3 0 015.356-1.857M7 20v-2c0-.656.126-1.283.356-1.857m0 0a5.002 5.002 0 019.288 0M15 7a3 3 0 11-6 0 3 3 0 016 0zm6 3a2 2 0 11-4 0 2 2 0 014 0zM7 10a2 2 0 11-4 0 2 2 0 014 0z"/></svg>
-              </div>
-              <span class="font-medium text-orange-700 dark:text-orange-300">Agent Swarms</span>
-            </div>
-            <p class="text-sm text-orange-600/80 dark:text-orange-400/70 flex-1">Spawn coordinated agent groups — pipeline, parallel, or debate strategies.</p>
-            <button @click="openSwarmModal()" :disabled="loading" class="w-full mt-4 bg-orange-100 dark:bg-orange-900/40 hover:bg-orange-200 dark:hover:bg-orange-900/60 disabled:opacity-50 disabled:cursor-not-allowed text-orange-700 dark:text-orange-300 px-4 py-2.5 rounded-lg font-medium border border-orange-300 dark:border-orange-700 transition-colors">
-              Launch Swarm
-            </button>
-          </div>
-        </div>
-
-        <div x-show="log" class="bg-neutral-100 dark:bg-neutral-950 border border-neutral-200 dark:border-neutral-800 rounded-lg p-4 font-mono text-xs text-neutral-600 dark:text-neutral-400 whitespace-pre-wrap max-h-64 overflow-y-auto" x-text="log"></div>
+      <!-- Quick Links -->
+      <div class="flex flex-wrap gap-3 justify-center mb-8">
+        <a href="/openclaw" target="_blank" class="inline-flex items-center gap-2 bg-gradient-to-r from-red-500 to-red-600 text-white px-5 py-2.5 rounded-xl text-sm font-semibold shadow-lg shadow-red-500/20 hover:shadow-red-500/30 hover:from-red-600 hover:to-red-700 transition-all">
+          <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M10 6H6a2 2 0 00-2 2v10a2 2 0 002 2h10a2 2 0 002-2v-4M14 4h6m0 0v6m0-6L10 14"/></svg>
+          Open AI Chat
+        </a>
+        <a x-show="tuiEnabled" href="/tui" target="_blank" class="inline-flex items-center gap-2 bg-white dark:bg-white/[0.06] border border-neutral-200 dark:border-white/[0.1] text-neutral-700 dark:text-neutral-300 px-5 py-2.5 rounded-xl text-sm font-medium hover:bg-neutral-50 dark:hover:bg-white/[0.08] transition-colors">
+          <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M8 9l3 3-3 3m5 0h3M5 20h14a2 2 0 002-2V6a2 2 0 00-2-2H5a2 2 0 00-2 2v12a2 2 0 002 2z"/></svg>
+          Terminal
+        </a>
+        <a href="/setup/export" class="inline-flex items-center gap-2 bg-white dark:bg-white/[0.06] border border-neutral-200 dark:border-white/[0.1] text-neutral-700 dark:text-neutral-300 px-5 py-2.5 rounded-xl text-sm font-medium hover:bg-neutral-50 dark:hover:bg-white/[0.08] transition-colors">
+          <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M4 16v1a3 3 0 003 3h10a3 3 0 003-3v-1m-4-4l-4 4m0 0l-4-4m4 4V4"/></svg>
+          Export Backup
+        </a>
+        <label class="inline-flex items-center gap-2 bg-white dark:bg-white/[0.06] border border-neutral-200 dark:border-white/[0.1] text-neutral-700 dark:text-neutral-300 px-5 py-2.5 rounded-xl text-sm font-medium hover:bg-neutral-50 dark:hover:bg-white/[0.08] transition-colors cursor-pointer">
+          <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M4 16v1a3 3 0 003 3h10a3 3 0 003-3v-1m-4-8l-4-4m0 0L8 8m4-4v12"/></svg>
+          Import Backup
+          <input type="file" accept=".tar.gz,.tgz" class="hidden" @change="importBackup($event)" />
+        </label>
       </div>
 
-      <!-- Backup & Data Section -->
-      <div class="bg-white dark:bg-neutral-900 border border-neutral-200 dark:border-neutral-800 rounded-xl p-6 shadow-sm dark:shadow-none mb-6">
-        <h2 class="text-lg font-semibold mb-1">Backup & Data</h2>
-        <p class="text-neutral-500 text-sm mb-5">Export or import your configuration and workspace data</p>
-        <div class="grid grid-cols-1 sm:grid-cols-2 gap-4">
-          <div class="bg-neutral-50 dark:bg-neutral-800/50 rounded-lg p-4 border border-neutral-200 dark:border-neutral-700">
-            <div class="flex items-center gap-3 mb-3">
-              <div class="w-9 h-9 bg-emerald-500/10 rounded-lg flex items-center justify-center">
-                <svg class="w-5 h-5 text-emerald-600 dark:text-emerald-400" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M4 16v1a3 3 0 003 3h10a3 3 0 003-3v-1m-4-4l-4 4m0 0l-4-4m4 4V4"/></svg>
-              </div>
-              <div>
-                <p class="font-medium text-sm">Export Backup</p>
-                <p class="text-xs text-neutral-500">Download .tar.gz archive</p>
-              </div>
+      <!-- Action Cards Grid -->
+      <div class="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-4 mb-8">
+
+        <!-- Doctor -->
+        <div class="card-hover bg-white dark:bg-white/[0.03] border border-neutral-200 dark:border-white/[0.06] rounded-2xl p-5 flex flex-col">
+          <div class="flex items-center gap-3 mb-3">
+            <div class="w-10 h-10 rounded-xl bg-amber-500/10 dark:bg-amber-500/10 flex items-center justify-center">
+              <svg class="w-5 h-5 text-amber-500" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 12l2 2 4-4m5.618-4.016A11.955 11.955 0 0112 2.944a11.955 11.955 0 01-8.618 3.04A12.02 12.02 0 003 9c0 5.591 3.824 10.29 9 11.622 5.176-1.332 9-6.03 9-11.622 0-1.042-.133-2.052-.382-3.016z"/></svg>
             </div>
-            <a href="/setup/export" class="block w-full text-center bg-emerald-100 dark:bg-emerald-900/30 hover:bg-emerald-200 dark:hover:bg-emerald-900/50 text-emerald-700 dark:text-emerald-300 px-4 py-2.5 rounded-lg font-medium text-sm border border-emerald-200 dark:border-emerald-800 transition-colors">
-              Download Backup
-            </a>
+            <div>
+              <h3 class="font-semibold text-sm">Run Doctor</h3>
+              <p class="text-xs text-neutral-500">Health check & repair</p>
+            </div>
           </div>
-          <div class="bg-neutral-50 dark:bg-neutral-800/50 rounded-lg p-4 border border-neutral-200 dark:border-neutral-700">
-            <div class="flex items-center gap-3 mb-3">
-              <div class="w-9 h-9 bg-blue-500/10 rounded-lg flex items-center justify-center">
-                <svg class="w-5 h-5 text-blue-600 dark:text-blue-400" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M4 16v1a3 3 0 003 3h10a3 3 0 003-3v-1m-4-8l-4-4m0 0L8 8m4-4v12"/></svg>
-              </div>
-              <div>
-                <p class="font-medium text-sm">Import Backup</p>
-                <p class="text-xs text-neutral-500">Restore from .tar.gz</p>
-              </div>
+          <p class="text-xs text-neutral-500 dark:text-neutral-500 flex-1 mb-4">Diagnoses issues and auto-repairs broken configuration with a backup.</p>
+          <button @click="runDoctor()" :disabled="loading" class="w-full bg-amber-500/10 hover:bg-amber-500/20 disabled:opacity-40 text-amber-600 dark:text-amber-400 text-sm font-medium px-4 py-2.5 rounded-xl transition-colors">
+            <span x-show="!loading">Run Doctor</span>
+            <span x-show="loading" class="flex items-center justify-center gap-2"><svg class="animate-spin w-4 h-4" fill="none" viewBox="0 0 24 24"><circle class="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" stroke-width="4"/><path class="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4z"/></svg>Running...</span>
+          </button>
+        </div>
+
+        <!-- Devices & Pairing -->
+        <div class="card-hover bg-white dark:bg-white/[0.03] border border-neutral-200 dark:border-white/[0.06] rounded-2xl p-5 flex flex-col">
+          <div class="flex items-center gap-3 mb-3">
+            <div class="w-10 h-10 rounded-xl bg-blue-500/10 flex items-center justify-center">
+              <svg class="w-5 h-5 text-blue-500" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 15v2m-6 4h12a2 2 0 002-2v-6a2 2 0 00-2-2H6a2 2 0 00-2 2v6a2 2 0 002 2zm10-10V7a4 4 0 00-8 0v4h8z"/></svg>
             </div>
-            <label class="block w-full text-center bg-blue-100 dark:bg-blue-900/30 hover:bg-blue-200 dark:hover:bg-blue-900/50 text-blue-700 dark:text-blue-300 px-4 py-2.5 rounded-lg font-medium text-sm border border-blue-200 dark:border-blue-800 transition-colors cursor-pointer">
-              Select File...
-              <input type="file" accept=".tar.gz,.tgz" class="hidden" @change="importBackup($event)" />
-            </label>
+            <div>
+              <h3 class="font-semibold text-sm">Devices & Pairing</h3>
+              <p class="text-xs text-neutral-500">Approve connections</p>
+            </div>
+          </div>
+          <p class="text-xs text-neutral-500 flex-1 mb-4">Manage device approvals and channel pairing requests.</p>
+          <div class="space-y-2">
+            <button @click="openDevicesModal()" :disabled="loading" class="w-full bg-blue-500/10 hover:bg-blue-500/20 disabled:opacity-40 text-blue-600 dark:text-blue-400 text-sm font-medium px-4 py-2.5 rounded-xl transition-colors">Manage Devices</button>
+            <button @click="openPairingModal()" :disabled="loading" class="w-full bg-white dark:bg-white/[0.04] hover:bg-neutral-50 dark:hover:bg-white/[0.06] border border-neutral-200 dark:border-white/[0.08] text-neutral-600 dark:text-neutral-400 text-sm font-medium px-4 py-2 rounded-xl transition-colors">Approve Pairing</button>
           </div>
         </div>
+
+        <!-- Model Config -->
+        <div class="card-hover bg-white dark:bg-white/[0.03] border border-neutral-200 dark:border-white/[0.06] rounded-2xl p-5 flex flex-col">
+          <div class="flex items-center gap-3 mb-3">
+            <div class="w-10 h-10 rounded-xl bg-purple-500/10 flex items-center justify-center">
+              <svg class="w-5 h-5 text-purple-500" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M13 10V3L4 14h7v7l9-11h-7z"/></svg>
+            </div>
+            <div>
+              <h3 class="font-semibold text-sm">Model Config</h3>
+              <p class="text-xs text-neutral-500">Multi-model routing</p>
+            </div>
+          </div>
+          <p class="text-xs text-neutral-500 flex-1 mb-4">Configure primary + fallback models for cost-efficient AI usage.</p>
+          <button @click="openModelsModal()" :disabled="loading" class="w-full bg-purple-500/10 hover:bg-purple-500/20 disabled:opacity-40 text-purple-600 dark:text-purple-400 text-sm font-medium px-4 py-2.5 rounded-xl transition-colors">Configure Models</button>
+        </div>
+
+        <!-- Agent Swarms -->
+        <div class="card-hover bg-white dark:bg-white/[0.03] border border-neutral-200 dark:border-white/[0.06] rounded-2xl p-5 flex flex-col">
+          <div class="flex items-center gap-3 mb-3">
+            <div class="w-10 h-10 rounded-xl bg-orange-500/10 flex items-center justify-center">
+              <svg class="w-5 h-5 text-orange-500" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M17 20h5v-2a3 3 0 00-5.356-1.857M17 20H7m10 0v-2c0-.656-.126-1.283-.356-1.857M7 20H2v-2a3 3 0 015.356-1.857M7 20v-2c0-.656.126-1.283.356-1.857m0 0a5.002 5.002 0 019.288 0M15 7a3 3 0 11-6 0 3 3 0 016 0z"/></svg>
+            </div>
+            <div>
+              <h3 class="font-semibold text-sm">Agent Swarms</h3>
+              <p class="text-xs text-neutral-500">Multi-agent tasks</p>
+            </div>
+          </div>
+          <p class="text-xs text-neutral-500 flex-1 mb-4">Coordinate agent groups using pipeline, parallel, or debate strategies.</p>
+          <button @click="openSwarmModal()" :disabled="loading" class="w-full bg-orange-500/10 hover:bg-orange-500/20 disabled:opacity-40 text-orange-600 dark:text-orange-400 text-sm font-medium px-4 py-2.5 rounded-xl transition-colors">Launch Swarm</button>
+        </div>
+
+        <!-- Reset -->
+        <div class="card-hover bg-white dark:bg-white/[0.03] border border-neutral-200 dark:border-white/[0.06] rounded-2xl p-5 flex flex-col">
+          <div class="flex items-center gap-3 mb-3">
+            <div class="w-10 h-10 rounded-xl bg-red-500/10 flex items-center justify-center">
+              <svg class="w-5 h-5 text-red-500" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M4 4v5h.582m15.356 2A8.001 8.001 0 004.582 9m0 0H9m11 11v-5h-.581m0 0a8.003 8.003 0 01-15.357-2m15.357 2H15"/></svg>
+            </div>
+            <div>
+              <h3 class="font-semibold text-sm">Reset Setup</h3>
+              <p class="text-xs text-neutral-500">Start over</p>
+            </div>
+          </div>
+          <p class="text-xs text-neutral-500 flex-1 mb-4">Deletes config so you can re-run onboarding from scratch.</p>
+          <button @click="resetSetup()" :disabled="loading" class="w-full bg-red-500/10 hover:bg-red-500/20 disabled:opacity-40 text-red-600 dark:text-red-400 text-sm font-medium px-4 py-2.5 rounded-xl transition-colors">Reset</button>
+        </div>
+      </div>
+
+      <!-- Log Output -->
+      <div x-show="log" class="bg-white dark:bg-black/30 border border-neutral-200 dark:border-white/[0.06] rounded-2xl p-5 mb-6">
+        <div class="flex items-center justify-between mb-3">
+          <h3 class="text-xs uppercase tracking-wider text-neutral-500 font-semibold">Output Log</h3>
+          <button @click="log = ''" class="text-xs text-neutral-400 hover:text-neutral-600 dark:hover:text-neutral-300">Clear</button>
+        </div>
+        <pre class="font-mono text-xs text-neutral-600 dark:text-neutral-400 whitespace-pre-wrap max-h-48 overflow-y-auto leading-relaxed" x-text="log"></pre>
       </div>
     </div>
 
-    <div x-show="isReady && !configured" x-cloak>
-      <div class="flex items-center justify-center gap-2 mb-8">
+    <!-- ============ SETUP WIZARD (unconfigured) ============ -->
+    <div x-show="isReady && !configured" x-cloak class="fade-in">
+
+      <!-- Step Indicator -->
+      <div class="flex items-center justify-center gap-1 mb-10">
         <template x-for="s in totalSteps" :key="s">
           <div class="flex items-center">
-            <div
-              class="w-8 h-8 rounded-full flex items-center justify-center text-sm font-medium transition-all cursor-pointer"
-              :class="step === s ? 'bg-red-600 text-white' : (step > s ? 'bg-emerald-600 text-white' : 'bg-neutral-200 dark:bg-neutral-800 text-neutral-500')"
+            <button
               @click="step = s"
+              class="w-9 h-9 rounded-full flex items-center justify-center text-sm font-semibold transition-all border-2"
+              :class="step === s
+                ? 'bg-red-500 border-red-500 text-white shadow-lg shadow-red-500/30'
+                : step > s
+                  ? 'bg-emerald-500 border-emerald-500 text-white'
+                  : 'bg-white dark:bg-white/[0.04] border-neutral-200 dark:border-white/[0.1] text-neutral-400'"
               x-text="s"
-            ></div>
-            <div x-show="s < totalSteps" class="w-12 h-0.5 mx-1" :class="step > s ? 'bg-emerald-600' : 'bg-neutral-200 dark:bg-neutral-800'"></div>
+            ></button>
+            <div x-show="s < totalSteps" class="w-16 h-0.5 mx-1" :class="step > s ? 'bg-emerald-500' : 'bg-neutral-200 dark:bg-white/[0.08]'"></div>
           </div>
         </template>
       </div>
 
-      <div x-show="step === 1" x-transition:enter="transition ease-out duration-200" x-transition:enter-start="opacity-0 translate-x-4" x-transition:enter-end="opacity-100 translate-x-0">
-        <div class="bg-white dark:bg-neutral-900 border border-neutral-200 dark:border-neutral-800 rounded-xl p-6 shadow-sm dark:shadow-none">
-          <h2 class="text-lg font-semibold mb-1">Model & Authentication</h2>
-          <p class="text-neutral-500 text-sm mb-6">Choose your AI provider and authentication method</p>
+      <!-- Step 1: Provider & Auth -->
+      <div x-show="step === 1" x-transition:enter="transition ease-out duration-200" x-transition:enter-start="opacity-0 translate-y-4" x-transition:enter-end="opacity-100 translate-y-0">
+        <div class="bg-white dark:bg-white/[0.03] border border-neutral-200 dark:border-white/[0.06] rounded-2xl p-7">
+          <h2 class="text-xl font-bold mb-1">Model & Authentication</h2>
+          <p class="text-neutral-500 text-sm mb-7">Choose your AI provider and how to authenticate</p>
 
           <div class="space-y-5">
             <div>
-              <label class="block text-xs uppercase tracking-wide text-neutral-500 font-medium mb-2">Provider Group</label>
-              <select x-model="selectedGroup" @change="updateAuthChoices()" class="w-full bg-neutral-50 dark:bg-neutral-800 border border-neutral-300 dark:border-neutral-700 rounded-lg px-4 py-3 text-sm focus:outline-none focus:border-red-500 transition-colors">
+              <label class="block text-xs uppercase tracking-wider text-neutral-500 font-semibold mb-2">Provider</label>
+              <select x-model="selectedGroup" @change="updateAuthChoices()" class="w-full bg-neutral-50 dark:bg-white/[0.04] border border-neutral-200 dark:border-white/[0.08] rounded-xl px-4 py-3 text-sm focus:outline-none input-focus focus:border-red-500 transition-all">
                 <template x-for="g in authGroups" :key="g.value">
                   <option :value="g.value" x-text="g.label + (g.hint ? ' — ' + g.hint : '')"></option>
                 </template>
               </select>
             </div>
-
             <div>
-              <label class="block text-xs uppercase tracking-wide text-neutral-500 font-medium mb-2">Auth Method</label>
-              <select x-model="selectedAuth" class="w-full bg-neutral-50 dark:bg-neutral-800 border border-neutral-300 dark:border-neutral-700 rounded-lg px-4 py-3 text-sm focus:outline-none focus:border-red-500 transition-colors">
+              <label class="block text-xs uppercase tracking-wider text-neutral-500 font-semibold mb-2">Auth Method</label>
+              <select x-model="selectedAuth" class="w-full bg-neutral-50 dark:bg-white/[0.04] border border-neutral-200 dark:border-white/[0.08] rounded-xl px-4 py-3 text-sm focus:outline-none input-focus focus:border-red-500 transition-all">
                 <template x-for="o in authChoices" :key="o.value">
-                  <option :value="o.value" x-text="o.label + (o.hint ? ' — ' + o.hint : '')"></option>
+                  <option :value="o.value" x-text="o.label"></option>
                 </template>
               </select>
             </div>
-
             <div>
-              <label class="block text-xs uppercase tracking-wide text-neutral-500 font-medium mb-2">API Key / Token</label>
-              <input x-model="authSecret" type="password" placeholder="Paste your API key or token" class="w-full bg-neutral-50 dark:bg-neutral-800 border border-neutral-300 dark:border-neutral-700 rounded-lg px-4 py-3 text-sm placeholder-neutral-400 dark:placeholder-neutral-600 focus:outline-none focus:border-red-500 transition-colors" />
+              <label class="block text-xs uppercase tracking-wider text-neutral-500 font-semibold mb-2">API Key / Token</label>
+              <input x-model="authSecret" type="password" placeholder="Paste your API key or token" class="w-full bg-neutral-50 dark:bg-white/[0.04] border border-neutral-200 dark:border-white/[0.08] rounded-xl px-4 py-3 text-sm placeholder-neutral-400 focus:outline-none input-focus focus:border-red-500 transition-all" />
             </div>
-
             <div>
-              <label class="block text-xs uppercase tracking-wide text-neutral-500 font-medium mb-2">Model</label>
-              <input x-model="model" type="text" placeholder="e.g. openai/gpt-4.1, anthropic/claude-sonnet-4" class="w-full bg-neutral-50 dark:bg-neutral-800 border border-neutral-300 dark:border-neutral-700 rounded-lg px-4 py-3 text-sm placeholder-neutral-400 dark:placeholder-neutral-600 focus:outline-none focus:border-red-500 transition-colors" />
-              <p class="text-xs text-neutral-500 dark:text-neutral-600 mt-2">Format: provider/model-name — <strong class="text-purple-600 dark:text-purple-400">Cost tip:</strong> use <code class="bg-neutral-200 dark:bg-neutral-800 px-1 rounded">openai/gpt-4.1-mini</code> or <code class="bg-neutral-200 dark:bg-neutral-800 px-1 rounded">anthropic/claude-haiku-4</code> for lower costs; use <code class="bg-neutral-200 dark:bg-neutral-800 px-1 rounded">openai/gpt-4.1</code> or <code class="bg-neutral-200 dark:bg-neutral-800 px-1 rounded">anthropic/claude-sonnet-4</code> for best quality</p>
-            </div>
-
-            <div>
-              <label class="block text-xs uppercase tracking-wide text-neutral-500 font-medium mb-2">Wizard Flow</label>
-              <select x-model="flow" class="w-full bg-neutral-50 dark:bg-neutral-800 border border-neutral-300 dark:border-neutral-700 rounded-lg px-4 py-3 text-sm focus:outline-none focus:border-red-500 transition-colors">
-                <option value="quickstart">Quickstart</option>
-                <option value="advanced">Advanced</option>
-                <option value="manual">Manual</option>
+              <label class="block text-xs uppercase tracking-wider text-neutral-500 font-semibold mb-2">Model</label>
+              <select x-show="modelList.length > 0" x-model="model" class="w-full bg-neutral-50 dark:bg-white/[0.04] border border-neutral-200 dark:border-white/[0.08] rounded-xl px-4 py-3 text-sm focus:outline-none input-focus focus:border-red-500 transition-all">
+                <template x-for="m in modelList" :key="m.value">
+                  <option :value="m.value" x-text="m.label"></option>
+                </template>
               </select>
+              <input x-show="modelList.length === 0" x-model="model" type="text" placeholder="e.g. openai/gpt-4.1, anthropic/claude-sonnet-4" class="w-full bg-neutral-50 dark:bg-white/[0.04] border border-neutral-200 dark:border-white/[0.08] rounded-xl px-4 py-3 text-sm placeholder-neutral-400 focus:outline-none input-focus focus:border-red-500 transition-all" />
+              <p x-show="detectedProviders.includes(selectedGroup)" class="text-xs text-emerald-500 mt-2 flex items-center gap-1">
+                <svg class="w-3.5 h-3.5" fill="currentColor" viewBox="0 0 20 20"><path fill-rule="evenodd" d="M10 18a8 8 0 100-16 8 8 0 000 16zm3.707-9.293a1 1 0 00-1.414-1.414L9 10.586 7.707 9.293a1 1 0 00-1.414 1.414l2 2a1 1 0 001.414 0l4-4z" clip-rule="evenodd"/></svg>
+                API key detected
+              </p>
+            </div>
+            <div>
+              <label class="block text-xs uppercase tracking-wider text-neutral-500 font-semibold mb-2">Setup Flow</label>
+              <div class="grid grid-cols-3 gap-2">
+                <button @click="flow = 'quickstart'" :class="flow === 'quickstart' ? 'bg-red-500/10 border-red-500/30 text-red-600 dark:text-red-400' : 'bg-neutral-50 dark:bg-white/[0.04] border-neutral-200 dark:border-white/[0.08] text-neutral-600 dark:text-neutral-400'" class="border rounded-xl px-3 py-2.5 text-sm font-medium transition-all text-center">Quickstart</button>
+                <button @click="flow = 'advanced'" :class="flow === 'advanced' ? 'bg-red-500/10 border-red-500/30 text-red-600 dark:text-red-400' : 'bg-neutral-50 dark:bg-white/[0.04] border-neutral-200 dark:border-white/[0.08] text-neutral-600 dark:text-neutral-400'" class="border rounded-xl px-3 py-2.5 text-sm font-medium transition-all text-center">Advanced</button>
+                <button @click="flow = 'manual'" :class="flow === 'manual' ? 'bg-red-500/10 border-red-500/30 text-red-600 dark:text-red-400' : 'bg-neutral-50 dark:bg-white/[0.04] border-neutral-200 dark:border-white/[0.08] text-neutral-600 dark:text-neutral-400'" class="border rounded-xl px-3 py-2.5 text-sm font-medium transition-all text-center">Manual</button>
+              </div>
             </div>
           </div>
         </div>
       </div>
 
-      <div x-show="step === 2" x-transition:enter="transition ease-out duration-200" x-transition:enter-start="opacity-0 translate-x-4" x-transition:enter-end="opacity-100 translate-x-0">
-        <div class="bg-white dark:bg-neutral-900 border border-neutral-200 dark:border-neutral-800 rounded-xl p-6 shadow-sm dark:shadow-none">
-          <h2 class="text-lg font-semibold mb-1">Channels</h2>
-          <p class="text-neutral-500 text-sm mb-6">Connect messaging platforms (optional — can be added later)</p>
+      <!-- Step 2: Channels -->
+      <div x-show="step === 2" x-transition:enter="transition ease-out duration-200" x-transition:enter-start="opacity-0 translate-y-4" x-transition:enter-end="opacity-100 translate-y-0">
+        <div class="bg-white dark:bg-white/[0.03] border border-neutral-200 dark:border-white/[0.06] rounded-2xl p-7">
+          <h2 class="text-xl font-bold mb-1">Channels</h2>
+          <p class="text-neutral-500 text-sm mb-7">Connect messaging platforms (all optional)</p>
 
-          <div class="space-y-5">
-            <div class="bg-sky-50 dark:bg-neutral-800/50 rounded-lg p-4 border border-sky-200 dark:border-neutral-800">
+          <div class="space-y-4">
+            <div class="bg-neutral-50 dark:bg-white/[0.02] border border-neutral-200 dark:border-white/[0.06] rounded-xl p-5">
               <div class="flex items-center gap-3 mb-3">
-                <div class="w-8 h-8 bg-sky-500/20 rounded-lg flex items-center justify-center">
-                  <svg class="w-5 h-5 text-sky-500 dark:text-sky-400" viewBox="0 0 24 24" fill="currentColor"><path d="M12 2C6.48 2 2 6.48 2 12s4.48 10 10 10 10-4.48 10-10S17.52 2 12 2zm4.64 6.8c-.15 1.58-.8 5.42-1.13 7.19-.14.75-.42 1-.68 1.03-.58.05-1.02-.38-1.58-.75-.88-.58-1.38-.94-2.23-1.5-.99-.65-.35-1.01.22-1.59.15-.15 2.71-2.48 2.76-2.69a.2.2 0 00-.05-.18c-.06-.05-.14-.03-.21-.02-.09.02-1.49.95-4.22 2.79-.4.27-.76.41-1.08.4-.36-.01-1.04-.2-1.55-.37-.63-.2-1.12-.31-1.08-.66.02-.18.27-.36.74-.55 2.92-1.27 4.86-2.11 5.83-2.51 2.78-1.16 3.35-1.36 3.73-1.36.08 0 .27.02.39.12.1.08.13.19.14.27-.01.06.01.24 0 .38z"/></svg>
+                <div class="w-9 h-9 rounded-lg bg-sky-500/10 flex items-center justify-center">
+                  <svg class="w-5 h-5 text-sky-500" viewBox="0 0 24 24" fill="currentColor"><path d="M12 2C6.48 2 2 6.48 2 12s4.48 10 10 10 10-4.48 10-10S17.52 2 12 2zm4.64 6.8c-.15 1.58-.8 5.42-1.13 7.19-.14.75-.42 1-.68 1.03-.58.05-1.02-.38-1.58-.75-.88-.58-1.38-.94-2.23-1.5-.99-.65-.35-1.01.22-1.59.15-.15 2.71-2.48 2.76-2.69a.2.2 0 00-.05-.18c-.06-.05-.14-.03-.21-.02-.09.02-1.49.95-4.22 2.79-.4.27-.76.41-1.08.4-.36-.01-1.04-.2-1.55-.37-.63-.2-1.12-.31-1.08-.66.02-.18.27-.36.74-.55 2.92-1.27 4.86-2.11 5.83-2.51 2.78-1.16 3.35-1.36 3.73-1.36.08 0 .27.02.39.12.1.08.13.19.14.27-.01.06.01.24 0 .38z"/></svg>
                 </div>
-                <span class="font-medium">Telegram</span>
+                <span class="font-semibold text-sm">Telegram</span>
               </div>
-              <input x-model="telegramToken" type="password" placeholder="Bot token from @BotFather" class="w-full bg-white dark:bg-neutral-900 border border-neutral-300 dark:border-neutral-700 rounded-lg px-4 py-3 text-sm placeholder-neutral-400 dark:placeholder-neutral-600 focus:outline-none focus:border-sky-500 transition-colors" />
-              <p class="text-xs text-neutral-500 dark:text-neutral-600 mt-2">Message <code class="bg-neutral-200 dark:bg-neutral-800 px-1.5 py-0.5 rounded text-sky-600 dark:text-sky-400">@BotFather</code> on Telegram and run <code class="bg-neutral-200 dark:bg-neutral-800 px-1.5 py-0.5 rounded text-sky-600 dark:text-sky-400">/newbot</code></p>
+              <input x-model="telegramToken" type="password" placeholder="Bot token from @BotFather" class="w-full bg-white dark:bg-white/[0.04] border border-neutral-200 dark:border-white/[0.08] rounded-xl px-4 py-3 text-sm placeholder-neutral-400 focus:outline-none input-focus focus:border-sky-500 transition-all" />
             </div>
 
-            <div class="bg-indigo-50 dark:bg-neutral-800/50 rounded-lg p-4 border border-indigo-200 dark:border-neutral-800">
+            <div class="bg-neutral-50 dark:bg-white/[0.02] border border-neutral-200 dark:border-white/[0.06] rounded-xl p-5">
               <div class="flex items-center gap-3 mb-3">
-                <div class="w-8 h-8 bg-indigo-500/20 rounded-lg flex items-center justify-center">
-                  <svg class="w-5 h-5 text-indigo-500 dark:text-indigo-400" viewBox="0 0 24 24" fill="currentColor"><path d="M20.317 4.37a19.791 19.791 0 00-4.885-1.515.074.074 0 00-.079.037c-.21.375-.444.864-.608 1.25a18.27 18.27 0 00-5.487 0 12.64 12.64 0 00-.617-1.25.077.077 0 00-.079-.037A19.736 19.736 0 003.677 4.37a.07.07 0 00-.032.027C.533 9.046-.32 13.58.099 18.057a.082.082 0 00.031.057 19.9 19.9 0 005.993 3.03.078.078 0 00.084-.028c.462-.63.874-1.295 1.226-1.994a.076.076 0 00-.041-.106 13.107 13.107 0 01-1.872-.892.077.077 0 01-.008-.128 10.2 10.2 0 00.372-.292.074.074 0 01.077-.01c3.928 1.793 8.18 1.793 12.062 0a.074.074 0 01.078.01c.12.098.246.198.373.292a.077.077 0 01-.006.127 12.299 12.299 0 01-1.873.892.077.077 0 00-.041.107c.36.698.772 1.362 1.225 1.993a.076.076 0 00.084.028 19.839 19.839 0 006.002-3.03.077.077 0 00.032-.054c.5-5.177-.838-9.674-3.549-13.66a.061.061 0 00-.031-.03zM8.02 15.33c-1.183 0-2.157-1.085-2.157-2.419 0-1.333.956-2.419 2.157-2.419 1.21 0 2.176 1.096 2.157 2.42 0 1.333-.956 2.418-2.157 2.418zm7.975 0c-1.183 0-2.157-1.085-2.157-2.419 0-1.333.955-2.419 2.157-2.419 1.21 0 2.176 1.096 2.157 2.42 0 1.333-.946 2.418-2.157 2.418z"/></svg>
+                <div class="w-9 h-9 rounded-lg bg-indigo-500/10 flex items-center justify-center">
+                  <svg class="w-5 h-5 text-indigo-500" viewBox="0 0 24 24" fill="currentColor"><path d="M20.317 4.37a19.791 19.791 0 00-4.885-1.515.074.074 0 00-.079.037c-.21.375-.444.864-.608 1.25a18.27 18.27 0 00-5.487 0 12.64 12.64 0 00-.617-1.25.077.077 0 00-.079-.037A19.736 19.736 0 003.677 4.37a.07.07 0 00-.032.027C.533 9.046-.32 13.58.099 18.057a.082.082 0 00.031.057 19.9 19.9 0 005.993 3.03.078.078 0 00.084-.028c.462-.63.874-1.295 1.226-1.994a.076.076 0 00-.041-.106 13.107 13.107 0 01-1.872-.892.077.077 0 01-.008-.128 10.2 10.2 0 00.372-.292.074.074 0 01.077-.01c3.928 1.793 8.18 1.793 12.062 0a.074.074 0 01.078.01c.12.098.246.198.373.292a.077.077 0 01-.006.127 12.299 12.299 0 01-1.873.892.077.077 0 00-.041.107c.36.698.772 1.362 1.225 1.993a.076.076 0 00.084.028 19.839 19.839 0 006.002-3.03.077.077 0 00.032-.054c.5-5.177-.838-9.674-3.549-13.66a.061.061 0 00-.031-.03zM8.02 15.33c-1.183 0-2.157-1.085-2.157-2.419 0-1.333.956-2.419 2.157-2.419 1.21 0 2.176 1.096 2.157 2.42 0 1.333-.956 2.418-2.157 2.418zm7.975 0c-1.183 0-2.157-1.085-2.157-2.419 0-1.333.955-2.419 2.157-2.419 1.21 0 2.176 1.096 2.157 2.42 0 1.333-.946 2.418-2.157 2.418z"/></svg>
                 </div>
-                <span class="font-medium">Discord</span>
+                <span class="font-semibold text-sm">Discord</span>
               </div>
-              <input x-model="discordToken" type="password" placeholder="Bot token from Developer Portal" class="w-full bg-white dark:bg-neutral-900 border border-neutral-300 dark:border-neutral-700 rounded-lg px-4 py-3 text-sm placeholder-neutral-400 dark:placeholder-neutral-600 focus:outline-none focus:border-indigo-500 transition-colors" />
-              <p class="text-xs text-neutral-500 dark:text-neutral-600 mt-2">Enable <strong class="text-amber-600 dark:text-amber-400">MESSAGE CONTENT INTENT</strong> in Bot → Privileged Gateway Intents</p>
+              <input x-model="discordToken" type="password" placeholder="Bot token from Developer Portal" class="w-full bg-white dark:bg-white/[0.04] border border-neutral-200 dark:border-white/[0.08] rounded-xl px-4 py-3 text-sm placeholder-neutral-400 focus:outline-none input-focus focus:border-indigo-500 transition-all" />
+              <p class="text-xs text-amber-500 mt-2">Enable MESSAGE CONTENT INTENT in Bot settings</p>
             </div>
 
-            <div class="bg-green-50 dark:bg-neutral-800/50 rounded-lg p-4 border border-green-200 dark:border-neutral-800">
+            <div class="bg-neutral-50 dark:bg-white/[0.02] border border-neutral-200 dark:border-white/[0.06] rounded-xl p-5">
               <div class="flex items-center gap-3 mb-3">
-                <div class="w-8 h-8 bg-green-500/20 rounded-lg flex items-center justify-center">
-                  <svg class="w-5 h-5 text-green-600 dark:text-green-400" viewBox="0 0 24 24" fill="currentColor"><path d="M5.042 15.165a2.528 2.528 0 01-2.52 2.523A2.528 2.528 0 010 15.165a2.527 2.527 0 012.522-2.52h2.52v2.52zm1.271 0a2.527 2.527 0 012.521-2.52 2.527 2.527 0 012.521 2.52v6.313A2.528 2.528 0 018.834 24a2.528 2.528 0 01-2.521-2.522v-6.313zM8.834 5.042a2.528 2.528 0 01-2.521-2.52A2.528 2.528 0 018.834 0a2.528 2.528 0 012.521 2.522v2.52H8.834zm0 1.271a2.528 2.528 0 012.521 2.521 2.528 2.528 0 01-2.521 2.521H2.522A2.528 2.528 0 010 8.834a2.528 2.528 0 012.522-2.521h6.312zm10.124 2.521a2.528 2.528 0 012.522-2.521A2.528 2.528 0 0124 8.834a2.528 2.528 0 01-2.52 2.521h-2.522V8.834zm-1.271 0a2.528 2.528 0 01-2.521 2.521 2.528 2.528 0 01-2.521-2.521V2.522A2.528 2.528 0 0115.166 0a2.528 2.528 0 012.521 2.522v6.312zm-2.521 10.124a2.528 2.528 0 012.521 2.522A2.528 2.528 0 0115.166 24a2.528 2.528 0 01-2.521-2.522v-2.522h2.521zm0-1.271a2.528 2.528 0 01-2.521-2.521 2.528 2.528 0 012.521-2.521h6.312A2.528 2.528 0 0124 15.165a2.528 2.528 0 01-2.52 2.521h-6.313z"/></svg>
+                <div class="w-9 h-9 rounded-lg bg-green-500/10 flex items-center justify-center">
+                  <svg class="w-5 h-5 text-green-500" viewBox="0 0 24 24" fill="currentColor"><path d="M5.042 15.165a2.528 2.528 0 01-2.52 2.523A2.528 2.528 0 010 15.165a2.527 2.527 0 012.522-2.52h2.52v2.52zm1.271 0a2.527 2.527 0 012.521-2.52 2.527 2.527 0 012.521 2.52v6.313A2.528 2.528 0 018.834 24a2.528 2.528 0 01-2.521-2.522v-6.313z"/></svg>
                 </div>
-                <span class="font-medium">Slack</span>
+                <span class="font-semibold text-sm">Slack</span>
               </div>
               <div class="space-y-3">
-                <input x-model="slackBotToken" type="password" placeholder="Bot token (xoxb-...)" class="w-full bg-white dark:bg-neutral-900 border border-neutral-300 dark:border-neutral-700 rounded-lg px-4 py-3 text-sm placeholder-neutral-400 dark:placeholder-neutral-600 focus:outline-none focus:border-green-500 transition-colors" />
-                <input x-model="slackAppToken" type="password" placeholder="App token (xapp-...)" class="w-full bg-white dark:bg-neutral-900 border border-neutral-300 dark:border-neutral-700 rounded-lg px-4 py-3 text-sm placeholder-neutral-400 dark:placeholder-neutral-600 focus:outline-none focus:border-green-500 transition-colors" />
+                <input x-model="slackBotToken" type="password" placeholder="Bot token (xoxb-...)" class="w-full bg-white dark:bg-white/[0.04] border border-neutral-200 dark:border-white/[0.08] rounded-xl px-4 py-3 text-sm placeholder-neutral-400 focus:outline-none input-focus focus:border-green-500 transition-all" />
+                <input x-model="slackAppToken" type="password" placeholder="App token (xapp-...)" class="w-full bg-white dark:bg-white/[0.04] border border-neutral-200 dark:border-white/[0.08] rounded-xl px-4 py-3 text-sm placeholder-neutral-400 focus:outline-none input-focus focus:border-green-500 transition-all" />
               </div>
             </div>
           </div>
         </div>
       </div>
 
-      <div x-show="step === 3" x-transition:enter="transition ease-out duration-200" x-transition:enter-start="opacity-0 translate-x-4" x-transition:enter-end="opacity-100 translate-x-0">
-        <div class="bg-white dark:bg-neutral-900 border border-neutral-200 dark:border-neutral-800 rounded-xl p-6 shadow-sm dark:shadow-none">
-          <h2 class="text-lg font-semibold mb-1">Run Setup</h2>
-          <p class="text-neutral-500 text-sm mb-6">Review your configuration and start OpenClaw</p>
+      <!-- Step 3: Review & Run -->
+      <div x-show="step === 3" x-transition:enter="transition ease-out duration-200" x-transition:enter-start="opacity-0 translate-y-4" x-transition:enter-end="opacity-100 translate-y-0">
+        <div class="bg-white dark:bg-white/[0.03] border border-neutral-200 dark:border-white/[0.06] rounded-2xl p-7">
+          <h2 class="text-xl font-bold mb-1">Review & Launch</h2>
+          <p class="text-neutral-500 text-sm mb-7">Confirm your settings and start OpenClaw</p>
 
-          <div class="bg-neutral-50 dark:bg-neutral-800/50 rounded-lg p-4 border border-neutral-200 dark:border-neutral-800 mb-6">
-            <h3 class="text-sm font-medium text-neutral-600 dark:text-neutral-400 mb-3">Configuration Summary</h3>
-            <dl class="space-y-2 text-sm">
-              <div class="flex justify-between">
+          <div class="bg-neutral-50 dark:bg-white/[0.02] border border-neutral-200 dark:border-white/[0.06] rounded-xl p-5 mb-6">
+            <dl class="space-y-3 text-sm">
+              <div class="flex justify-between items-center">
                 <dt class="text-neutral-500">Provider</dt>
-                <dd x-text="selectedGroup || '—'" class="text-neutral-700 dark:text-neutral-300"></dd>
+                <dd class="font-medium" x-text="selectedGroup || '---'"></dd>
               </div>
-              <div class="flex justify-between">
-                <dt class="text-neutral-500">Auth</dt>
-                <dd x-text="selectedAuth || '—'" class="text-neutral-700 dark:text-neutral-300"></dd>
+              <div class="border-t border-neutral-100 dark:border-white/[0.04]"></div>
+              <div class="flex justify-between items-center">
+                <dt class="text-neutral-500">Auth Method</dt>
+                <dd class="font-medium" x-text="selectedAuth || '---'"></dd>
               </div>
-              <div class="flex justify-between">
+              <div class="border-t border-neutral-100 dark:border-white/[0.04]"></div>
+              <div class="flex justify-between items-center">
                 <dt class="text-neutral-500">Model</dt>
-                <dd x-text="model || 'Default'" class="text-neutral-700 dark:text-neutral-300"></dd>
+                <dd class="font-medium font-mono text-xs" x-text="model || 'Default'"></dd>
               </div>
-              <div class="flex justify-between">
+              <div class="border-t border-neutral-100 dark:border-white/[0.04]"></div>
+              <div class="flex justify-between items-center">
                 <dt class="text-neutral-500">Channels</dt>
-                <dd class="text-neutral-700 dark:text-neutral-300">
-                  <span x-show="telegramToken" class="inline-flex items-center gap-1 bg-sky-100 dark:bg-sky-500/20 text-sky-600 dark:text-sky-400 px-2 py-0.5 rounded text-xs mr-1">Telegram</span>
-                  <span x-show="discordToken" class="inline-flex items-center gap-1 bg-indigo-100 dark:bg-indigo-500/20 text-indigo-600 dark:text-indigo-400 px-2 py-0.5 rounded text-xs mr-1">Discord</span>
-                  <span x-show="slackBotToken && slackAppToken" class="inline-flex items-center gap-1 bg-green-100 dark:bg-green-500/20 text-green-600 dark:text-green-400 px-2 py-0.5 rounded text-xs">Slack</span>
-                  <span x-show="!telegramToken && !discordToken && !(slackBotToken && slackAppToken)" class="text-neutral-500">None</span>
+                <dd class="flex gap-1.5">
+                  <span x-show="telegramToken" class="bg-sky-500/10 text-sky-600 dark:text-sky-400 px-2 py-0.5 rounded-md text-xs font-medium">Telegram</span>
+                  <span x-show="discordToken" class="bg-indigo-500/10 text-indigo-600 dark:text-indigo-400 px-2 py-0.5 rounded-md text-xs font-medium">Discord</span>
+                  <span x-show="slackBotToken && slackAppToken" class="bg-green-500/10 text-green-600 dark:text-green-400 px-2 py-0.5 rounded-md text-xs font-medium">Slack</span>
+                  <span x-show="!telegramToken && !discordToken && !(slackBotToken && slackAppToken)" class="text-neutral-400 text-xs">None</span>
                 </dd>
               </div>
             </dl>
           </div>
 
-          <div class="flex flex-wrap gap-3 mb-4">
-            <button @click="runSetup()" :disabled="loading" class="bg-red-600 hover:bg-red-700 disabled:opacity-50 disabled:cursor-not-allowed text-white px-6 py-3 rounded-lg font-medium transition-colors">
-              <span x-show="!loading">Run Setup</span>
-              <span x-show="loading" class="flex items-center gap-2">
-                <svg class="animate-spin w-4 h-4" fill="none" viewBox="0 0 24 24"><circle class="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" stroke-width="4"/><path class="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4z"/></svg>
-                Running...
-              </span>
-            </button>
-            <button @click="openPairingModal()" :disabled="loading" class="bg-neutral-100 dark:bg-neutral-800 hover:bg-neutral-200 dark:hover:bg-neutral-700 disabled:opacity-50 disabled:cursor-not-allowed text-neutral-700 dark:text-neutral-300 px-4 py-3 rounded-lg font-medium border border-neutral-300 dark:border-neutral-700 transition-colors">
-              Approve Channel Pairing
-            </button>
-            <button @click="openDevicesModal()" :disabled="loading" class="bg-blue-600 hover:bg-blue-700 disabled:opacity-50 disabled:cursor-not-allowed text-white px-4 py-3 rounded-lg font-medium border border-blue-700 transition-colors">
-              Manage Devices
-            </button>
-            <button @click="resetSetup()" :disabled="loading" class="text-neutral-500 hover:text-neutral-700 dark:hover:text-neutral-300 hover:bg-neutral-100 dark:hover:bg-neutral-800 disabled:opacity-50 disabled:cursor-not-allowed px-4 py-3 rounded-lg font-medium transition-colors">
-              Reset
-            </button>
+          <button @click="runSetup()" :disabled="loading" class="w-full bg-gradient-to-r from-red-500 to-red-600 hover:from-red-600 hover:to-red-700 disabled:opacity-50 text-white px-6 py-3.5 rounded-xl font-semibold shadow-lg shadow-red-500/20 transition-all text-sm">
+            <span x-show="!loading">Launch OpenClaw</span>
+            <span x-show="loading" class="flex items-center justify-center gap-2"><svg class="animate-spin w-4 h-4" fill="none" viewBox="0 0 24 24"><circle class="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" stroke-width="4"/><path class="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4z"/></svg>Setting up...</span>
+          </button>
+
+          <div x-show="log" class="mt-5 bg-black/[0.02] dark:bg-black/30 border border-neutral-200 dark:border-white/[0.06] rounded-xl p-4">
+            <pre class="font-mono text-xs text-neutral-600 dark:text-neutral-400 whitespace-pre-wrap max-h-48 overflow-y-auto leading-relaxed" x-text="log"></pre>
           </div>
-
-          <div x-show="log" class="bg-neutral-100 dark:bg-neutral-950 border border-neutral-200 dark:border-neutral-800 rounded-lg p-4 font-mono text-xs text-neutral-600 dark:text-neutral-400 whitespace-pre-wrap max-h-64 overflow-y-auto" x-text="log"></div>
-
-          <p class="text-xs text-neutral-500 dark:text-neutral-600 mt-4">Manage Devices approves first-time web UI devices. Channel pairing grants DM access when dmPolicy=pairing.</p>
         </div>
       </div>
 
+      <!-- Navigation -->
       <div class="flex justify-between mt-6">
-        <button
-          x-show="step > 1"
-          @click="prevStep()"
-          class="flex items-center gap-2 text-neutral-500 hover:text-neutral-700 dark:text-neutral-400 dark:hover:text-neutral-200 transition-colors"
-        >
-          <svg class="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M15 19l-7-7 7-7"/></svg>
-          Back
+        <button x-show="step > 1" @click="prevStep()" class="flex items-center gap-1.5 text-neutral-500 hover:text-neutral-700 dark:hover:text-neutral-300 text-sm font-medium transition-colors">
+          <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M15 19l-7-7 7-7"/></svg>Back
         </button>
         <div x-show="step === 1"></div>
-        <button
-          x-show="step < totalSteps"
-          @click="nextStep()"
-          class="flex items-center gap-2 bg-neutral-200 dark:bg-neutral-800 hover:bg-neutral-300 dark:hover:bg-neutral-700 text-neutral-800 dark:text-neutral-200 px-5 py-2.5 rounded-lg font-medium transition-colors ml-auto"
-        >
-          Next
-          <svg class="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 5l7 7-7 7"/></svg>
+        <button x-show="step < totalSteps" @click="nextStep()" class="flex items-center gap-1.5 bg-white dark:bg-white/[0.06] border border-neutral-200 dark:border-white/[0.1] hover:bg-neutral-50 dark:hover:bg-white/[0.08] text-neutral-700 dark:text-neutral-200 px-5 py-2.5 rounded-xl text-sm font-medium transition-colors ml-auto">
+          Next<svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 5l7 7-7 7"/></svg>
         </button>
       </div>
     </div>
 
-    <div x-show="showPairingModal" x-cloak class="fixed inset-0 bg-black/50 dark:bg-black/70 flex items-center justify-center z-50" @click.self="showPairingModal = false">
-      <div class="bg-white dark:bg-neutral-900 border border-neutral-200 dark:border-neutral-800 rounded-xl p-6 w-full max-w-sm mx-4 shadow-xl dark:shadow-none">
-        <h3 class="text-lg font-semibold mb-4">Approve Pairing</h3>
+    <!-- ============ MODALS ============ -->
+
+    <!-- Pairing Modal -->
+    <div x-show="showPairingModal" x-cloak class="fixed inset-0 bg-black/60 dark:bg-black/80 flex items-center justify-center z-50 backdrop-blur-sm" @click.self="showPairingModal = false">
+      <div class="bg-white dark:bg-[#141419] border border-neutral-200 dark:border-white/[0.08] rounded-2xl p-6 w-full max-w-sm mx-4 shadow-2xl">
+        <h3 class="text-lg font-bold mb-4">Approve Pairing</h3>
         <div class="space-y-4">
           <div>
-            <label class="block text-xs uppercase tracking-wide text-neutral-500 font-medium mb-2">Channel</label>
-            <select x-model="pairingChannel" class="w-full bg-neutral-50 dark:bg-neutral-800 border border-neutral-300 dark:border-neutral-700 rounded-lg px-4 py-3 text-sm focus:outline-none focus:border-red-500 transition-colors">
-              <option value="">Select channel...</option>
-              <option value="telegram">Telegram</option>
-              <option value="discord">Discord</option>
+            <label class="block text-xs uppercase tracking-wider text-neutral-500 font-semibold mb-2">Channel</label>
+            <select x-model="pairingChannel" class="w-full bg-neutral-50 dark:bg-white/[0.04] border border-neutral-200 dark:border-white/[0.08] rounded-xl px-4 py-3 text-sm focus:outline-none input-focus">
+              <option value="">Select...</option><option value="telegram">Telegram</option><option value="discord">Discord</option>
             </select>
           </div>
           <div>
-            <label class="block text-xs uppercase tracking-wide text-neutral-500 font-medium mb-2">Pairing Code</label>
-            <input x-model="pairingCode" type="text" placeholder="e.g. 3EY4PUYS" class="w-full bg-neutral-50 dark:bg-neutral-800 border border-neutral-300 dark:border-neutral-700 rounded-lg px-4 py-3 text-sm placeholder-neutral-400 dark:placeholder-neutral-600 focus:outline-none focus:border-red-500 transition-colors" />
+            <label class="block text-xs uppercase tracking-wider text-neutral-500 font-semibold mb-2">Pairing Code</label>
+            <input x-model="pairingCode" type="text" placeholder="e.g. 3EY4PUYS" class="w-full bg-neutral-50 dark:bg-white/[0.04] border border-neutral-200 dark:border-white/[0.08] rounded-xl px-4 py-3 text-sm focus:outline-none input-focus" />
           </div>
-          <div class="flex gap-3 pt-2">
-            <button @click="approvePairing()" class="flex-1 bg-red-600 hover:bg-red-700 text-white px-4 py-3 rounded-lg font-medium transition-colors">Approve</button>
-            <button @click="showPairingModal = false" class="flex-1 bg-neutral-100 dark:bg-neutral-800 hover:bg-neutral-200 dark:hover:bg-neutral-700 text-neutral-700 dark:text-neutral-300 px-4 py-3 rounded-lg font-medium border border-neutral-300 dark:border-neutral-700 transition-colors">Cancel</button>
+          <div class="flex gap-3 pt-1">
+            <button @click="approvePairing()" class="flex-1 bg-red-500 hover:bg-red-600 text-white px-4 py-2.5 rounded-xl font-medium transition-colors text-sm">Approve</button>
+            <button @click="showPairingModal = false" class="flex-1 bg-neutral-100 dark:bg-white/[0.06] hover:bg-neutral-200 dark:hover:bg-white/[0.08] text-neutral-700 dark:text-neutral-300 px-4 py-2.5 rounded-xl font-medium transition-colors text-sm">Cancel</button>
           </div>
         </div>
       </div>
     </div>
 
-    <div x-show="showDevicesModal" x-cloak class="fixed inset-0 bg-black/50 dark:bg-black/70 flex items-center justify-center z-50" @click.self="showDevicesModal = false">
-      <div class="bg-white dark:bg-neutral-900 border border-neutral-200 dark:border-neutral-800 rounded-xl p-6 w-full max-w-2xl mx-4 shadow-xl dark:shadow-none max-h-[85vh] overflow-y-auto">
-        <div class="flex items-center justify-between mb-3">
-          <h3 class="text-lg font-semibold">Manage Devices</h3>
-          <button @click="loadDevices()" :disabled="devicesLoading" class="text-sm text-blue-600 dark:text-blue-400 hover:text-blue-500 dark:hover:text-blue-300 disabled:opacity-50">Refresh</button>
+    <!-- Devices Modal -->
+    <div x-show="showDevicesModal" x-cloak class="fixed inset-0 bg-black/60 dark:bg-black/80 flex items-center justify-center z-50 backdrop-blur-sm" @click.self="showDevicesModal = false">
+      <div class="bg-white dark:bg-[#141419] border border-neutral-200 dark:border-white/[0.08] rounded-2xl p-6 w-full max-w-2xl mx-4 shadow-2xl max-h-[85vh] overflow-y-auto">
+        <div class="flex items-center justify-between mb-4">
+          <h3 class="text-lg font-bold">Manage Devices</h3>
+          <div class="flex items-center gap-2">
+            <button @click="loadDevices()" :disabled="devicesLoading" class="text-xs text-blue-500 hover:text-blue-400 disabled:opacity-50">Refresh</button>
+            <button @click="showDevicesModal = false" class="text-neutral-400 hover:text-neutral-600 dark:hover:text-neutral-300"><svg class="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M6 18L18 6M6 6l12 12"/></svg></button>
+          </div>
         </div>
-        <p class="text-sm text-neutral-500 dark:text-neutral-400 mb-4">Approve first-time browser connections for the Control UI (pairing required).</p>
-
-        <button @click="approveDevice()" :disabled="devicesLoading" class="w-full mb-4 bg-blue-600 hover:bg-blue-700 disabled:opacity-50 disabled:cursor-not-allowed text-white px-4 py-2.5 rounded-lg font-medium transition-colors">
-          <span x-show="!devicesLoading">Approve Latest Request</span>
-          <span x-show="devicesLoading">Loading...</span>
+        <button @click="approveDevice()" :disabled="devicesLoading" class="w-full mb-4 bg-blue-500 hover:bg-blue-600 disabled:opacity-50 text-white px-4 py-2.5 rounded-xl font-medium transition-colors text-sm">
+          <span x-show="!devicesLoading">Approve Latest Request</span><span x-show="devicesLoading">Loading...</span>
         </button>
-
         <div class="grid grid-cols-1 md:grid-cols-2 gap-4">
           <div>
-            <h4 class="text-xs uppercase tracking-wide text-neutral-500 font-medium mb-2">Pending Requests</h4>
-            <div x-show="devicesPending.length === 0 && !devicesLoading" class="bg-neutral-100 dark:bg-neutral-800 border border-neutral-200 dark:border-neutral-700 rounded-lg p-3 text-sm text-neutral-500 dark:text-neutral-400">No pending requests</div>
+            <h4 class="text-xs uppercase tracking-wider text-neutral-500 font-semibold mb-2">Pending</h4>
+            <div x-show="devicesPending.length === 0 && !devicesLoading" class="bg-neutral-50 dark:bg-white/[0.02] border border-neutral-200 dark:border-white/[0.06] rounded-xl p-3 text-sm text-neutral-400">No pending requests</div>
             <div class="space-y-2">
               <template x-for="req in devicesPending" :key="req.requestId || req.id">
-                <div class="bg-neutral-100 dark:bg-neutral-800 border border-neutral-200 dark:border-neutral-700 rounded-lg p-3">
-                  <p class="text-sm font-medium break-all" x-text="req.requestId || req.id"></p>
-                  <p class="text-xs text-neutral-500 dark:text-neutral-400" x-text="(req.platform || 'unknown') + (req.remoteIp ? ' • ' + req.remoteIp : '')"></p>
-                  <button @click="approveDevice(req.requestId || req.id)" :disabled="devicesLoading" class="mt-2 bg-emerald-600 hover:bg-emerald-700 disabled:opacity-50 text-white px-3 py-1.5 rounded text-xs font-medium transition-colors">Approve</button>
+                <div class="bg-neutral-50 dark:bg-white/[0.02] border border-neutral-200 dark:border-white/[0.06] rounded-xl p-3">
+                  <p class="text-sm font-medium break-all font-mono" x-text="req.requestId || req.id"></p>
+                  <p class="text-xs text-neutral-500" x-text="(req.platform || 'unknown') + (req.remoteIp ? ' · ' + req.remoteIp : '')"></p>
+                  <button @click="approveDevice(req.requestId || req.id)" :disabled="devicesLoading" class="mt-2 bg-emerald-500/10 hover:bg-emerald-500/20 text-emerald-600 dark:text-emerald-400 px-3 py-1.5 rounded-lg text-xs font-medium transition-colors">Approve</button>
                 </div>
               </template>
             </div>
           </div>
           <div>
-            <h4 class="text-xs uppercase tracking-wide text-neutral-500 font-medium mb-2">Paired Devices</h4>
-            <div x-show="devicesPaired.length === 0 && !devicesLoading" class="bg-neutral-100 dark:bg-neutral-800 border border-neutral-200 dark:border-neutral-700 rounded-lg p-3 text-sm text-neutral-500 dark:text-neutral-400">No paired devices</div>
+            <h4 class="text-xs uppercase tracking-wider text-neutral-500 font-semibold mb-2">Paired</h4>
+            <div x-show="devicesPaired.length === 0 && !devicesLoading" class="bg-neutral-50 dark:bg-white/[0.02] border border-neutral-200 dark:border-white/[0.06] rounded-xl p-3 text-sm text-neutral-400">No paired devices</div>
             <div class="space-y-2">
               <template x-for="dev in devicesPaired" :key="dev.deviceId || dev.id">
-                <div class="bg-neutral-100 dark:bg-neutral-800 border border-neutral-200 dark:border-neutral-700 rounded-lg p-3">
-                  <p class="text-sm font-medium break-all" x-text="dev.deviceId || dev.id"></p>
-                  <p class="text-xs text-neutral-500 dark:text-neutral-400" x-text="dev.role || 'operator'"></p>
+                <div class="bg-neutral-50 dark:bg-white/[0.02] border border-neutral-200 dark:border-white/[0.06] rounded-xl p-3">
+                  <p class="text-sm font-medium break-all font-mono" x-text="dev.deviceId || dev.id"></p>
+                  <p class="text-xs text-neutral-500" x-text="dev.role || 'operator'"></p>
                 </div>
               </template>
             </div>
           </div>
         </div>
-
-        <div class="mt-4 flex justify-end">
-          <button @click="showDevicesModal = false" class="bg-neutral-100 dark:bg-neutral-800 hover:bg-neutral-200 dark:hover:bg-neutral-700 text-neutral-700 dark:text-neutral-300 px-4 py-2.5 rounded-lg font-medium border border-neutral-300 dark:border-neutral-700 transition-colors">Close</button>
-        </div>
       </div>
     </div>
 
-    <!-- Agent Swarm Modal -->
-    <div x-show="showSwarmModal" x-cloak class="fixed inset-0 bg-black/50 dark:bg-black/70 flex items-center justify-center z-50" @click.self="showSwarmModal = false">
-      <div class="bg-white dark:bg-neutral-900 border border-neutral-200 dark:border-neutral-800 rounded-xl p-6 w-full max-w-3xl mx-4 shadow-xl dark:shadow-none max-h-[90vh] overflow-y-auto">
-        <div class="flex items-center justify-between mb-3">
-          <h3 class="text-lg font-semibold flex items-center gap-2">
-            <svg class="w-5 h-5 text-orange-500" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M17 20h5v-2a3 3 0 00-5.356-1.857M17 20H7m10 0v-2c0-.656-.126-1.283-.356-1.857M7 20H2v-2a3 3 0 015.356-1.857M7 20v-2c0-.656.126-1.283.356-1.857m0 0a5.002 5.002 0 019.288 0M15 7a3 3 0 11-6 0 3 3 0 016 0zm6 3a2 2 0 11-4 0 2 2 0 014 0zM7 10a2 2 0 11-4 0 2 2 0 014 0z"/></svg>
-            Agent Swarms
-          </h3>
-          <button @click="showSwarmModal = false" class="text-neutral-400 hover:text-neutral-600 dark:hover:text-neutral-300">
-            <svg class="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M6 18L18 6M6 6l12 12"/></svg>
-          </button>
+    <!-- Multi-Model Modal -->
+    <div x-show="showModelsModal" x-cloak class="fixed inset-0 bg-black/60 dark:bg-black/80 flex items-center justify-center z-50 backdrop-blur-sm" @click.self="showModelsModal = false">
+      <div class="bg-white dark:bg-[#141419] border border-neutral-200 dark:border-white/[0.08] rounded-2xl p-6 w-full max-w-2xl mx-4 shadow-2xl max-h-[85vh] overflow-y-auto">
+        <div class="flex items-center justify-between mb-4">
+          <h3 class="text-lg font-bold">Multi-Model Configuration</h3>
+          <button @click="showModelsModal = false" class="text-neutral-400 hover:text-neutral-600 dark:hover:text-neutral-300"><svg class="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M6 18L18 6M6 6l12 12"/></svg></button>
         </div>
 
-        <!-- Swarm Detail View -->
-        <template x-if="swarmDetailId && swarmDetail">
-          <div>
-            <button @click="swarmDetailId = null; swarmDetail = null" class="text-sm text-orange-600 dark:text-orange-400 hover:text-orange-500 mb-3 flex items-center gap-1">
-              <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M15 19l-7-7 7-7"/></svg>
-              Back to list
-            </button>
-
-            <div class="bg-neutral-50 dark:bg-neutral-800/50 border border-neutral-200 dark:border-neutral-700 rounded-lg p-4 mb-4">
-              <div class="flex items-center justify-between mb-2">
-                <span class="font-semibold" x-text="swarmDetail.templateName"></span>
-                <span class="text-xs px-2 py-1 rounded-full" :class="swarmDetail.status === 'running' ? 'bg-blue-100 dark:bg-blue-900/30 text-blue-600 dark:text-blue-400' : swarmDetail.status === 'completed' ? 'bg-emerald-100 dark:bg-emerald-900/30 text-emerald-600 dark:text-emerald-400' : 'bg-red-100 dark:bg-red-900/30 text-red-600 dark:text-red-400'" x-text="swarmDetail.status"></span>
-              </div>
-              <p class="text-sm text-neutral-600 dark:text-neutral-400 mb-2" x-text="swarmDetail.task"></p>
-              <div class="flex items-center gap-4 text-xs text-neutral-500">
-                <span>Strategy: <strong x-text="swarmDetail.strategy"></strong></span>
-                <span>Cost: $<span x-text="(swarmDetail.totalCostUsd || 0).toFixed(4)"></span></span>
-                <span x-text="new Date(swarmDetail.createdAt).toLocaleString()"></span>
-              </div>
-            </div>
-
-            <h4 class="text-sm font-medium text-neutral-500 mb-2">Steps</h4>
-            <div class="space-y-2">
-              <template x-for="(step, index) in swarmDetail.steps" :key="index">
-                <div class="bg-neutral-50 dark:bg-neutral-800/50 border border-neutral-200 dark:border-neutral-700 rounded-lg p-3">
-                  <div class="flex items-center justify-between mb-1">
-                    <div class="flex items-center gap-2">
-                      <span class="text-xs font-mono bg-neutral-200 dark:bg-neutral-700 px-1.5 py-0.5 rounded" x-text="'#' + (index + 1)"></span>
-                      <span class="font-medium text-sm" x-text="step.agentName"></span>
-                      <span class="text-xs text-neutral-500" x-text="'(' + step.agent + ')'"></span>
-                    </div>
-                    <span class="text-xs font-medium" :class="swarmStatusColor(step.status)" x-text="step.status"></span>
-                  </div>
-                  <p class="text-xs text-neutral-500 mb-1" x-text="step.instruction"></p>
-                  <p x-show="step.error" class="text-xs text-red-500 mt-1" x-text="step.error"></p>
-                  <div x-show="step.output" class="mt-2 bg-neutral-100 dark:bg-neutral-900 border border-neutral-200 dark:border-neutral-800 rounded p-2 text-xs font-mono text-neutral-600 dark:text-neutral-400 max-h-40 overflow-y-auto whitespace-pre-wrap" x-text="step.output"></div>
-                  <div x-show="step.costUsd > 0" class="text-[10px] text-neutral-500 mt-1">Cost: $<span x-text="step.costUsd.toFixed(4)"></span></div>
-                </div>
-              </template>
-            </div>
-
-            <div x-show="swarmDetail.result" class="mt-4">
-              <h4 class="text-sm font-medium text-neutral-500 mb-2">Aggregated Result</h4>
-              <div class="bg-neutral-50 dark:bg-neutral-800/50 border border-neutral-200 dark:border-neutral-700 rounded-lg p-3 text-sm text-neutral-700 dark:text-neutral-300 max-h-60 overflow-y-auto whitespace-pre-wrap" x-text="swarmDetail.result"></div>
-            </div>
-
-            <div class="flex gap-3 mt-4">
-              <button x-show="swarmDetail.status === 'running'" @click="cancelSwarm(swarmDetail.id)" class="bg-red-600 hover:bg-red-700 text-white px-4 py-2 rounded-lg text-sm font-medium transition-colors">Cancel Swarm</button>
-              <button x-show="swarmDetail.status === 'running'" @click="viewSwarmDetail(swarmDetail.id)" class="bg-neutral-200 dark:bg-neutral-800 hover:bg-neutral-300 dark:hover:bg-neutral-700 text-neutral-700 dark:text-neutral-300 px-4 py-2 rounded-lg text-sm font-medium transition-colors">Refresh</button>
-            </div>
-          </div>
-        </template>
-
-        <!-- Swarm List View (default) -->
-        <template x-if="!swarmDetailId">
-          <div>
-            <p class="text-sm text-neutral-500 dark:text-neutral-400 mb-4">Coordinate multiple agents on complex tasks using predefined strategies.</p>
-
-            <!-- Stats bar -->
-            <div x-show="swarmStats" class="flex items-center gap-4 bg-neutral-50 dark:bg-neutral-800/50 border border-neutral-200 dark:border-neutral-700 rounded-lg px-4 py-2.5 mb-4 text-xs">
-              <span class="text-neutral-500">Total: <strong class="text-neutral-700 dark:text-neutral-300" x-text="swarmStats?.total || 0"></strong></span>
-              <span class="text-blue-500">Active: <strong x-text="swarmStats?.active || 0"></strong></span>
-              <span class="text-emerald-500">Done: <strong x-text="swarmStats?.completed || 0"></strong></span>
-              <span class="text-red-500">Failed: <strong x-text="swarmStats?.failed || 0"></strong></span>
-              <span class="text-neutral-500 ml-auto">Cost: $<strong class="text-neutral-700 dark:text-neutral-300" x-text="(swarmStats?.totalCostUsd || 0).toFixed(4)"></strong></span>
-            </div>
-
-            <!-- Spawn form -->
-            <div class="bg-orange-50 dark:bg-orange-900/10 border border-orange-200 dark:border-orange-800 rounded-lg p-4 mb-4">
-              <h4 class="text-sm font-medium text-orange-700 dark:text-orange-300 mb-3">Spawn New Swarm</h4>
-              <div class="space-y-3">
-                <div>
-                  <label class="block text-xs uppercase tracking-wide text-neutral-500 font-medium mb-1.5">Template</label>
-                  <select x-model="swarmSelectedTemplate" class="w-full bg-white dark:bg-neutral-800 border border-neutral-300 dark:border-neutral-700 rounded-lg px-3 py-2.5 text-sm focus:outline-none focus:border-orange-500 transition-colors">
-                    <template x-for="t in swarmTemplates" :key="t.id">
-                      <option :value="t.id" x-text="t.name + ' (' + t.strategy + ', ' + t.stepCount + ' steps) — ' + t.description"></option>
-                    </template>
-                  </select>
-                </div>
-                <div>
-                  <label class="block text-xs uppercase tracking-wide text-neutral-500 font-medium mb-1.5">Task Description</label>
-                  <textarea x-model="swarmTask" rows="3" placeholder="Describe the task in detail. The swarm will decompose it and assign to agents..." class="w-full bg-white dark:bg-neutral-800 border border-neutral-300 dark:border-neutral-700 rounded-lg px-3 py-2.5 text-sm placeholder-neutral-400 dark:placeholder-neutral-600 focus:outline-none focus:border-orange-500 transition-colors resize-none"></textarea>
-                </div>
-                <button @click="spawnSwarm()" :disabled="swarmLoading || !swarmTask.trim()" class="w-full bg-orange-600 hover:bg-orange-700 disabled:opacity-50 disabled:cursor-not-allowed text-white px-4 py-2.5 rounded-lg font-medium transition-colors">
-                  <span x-show="!swarmLoading">Launch Swarm</span>
-                  <span x-show="swarmLoading" class="flex items-center justify-center gap-2">
-                    <svg class="animate-spin w-4 h-4" fill="none" viewBox="0 0 24 24"><circle class="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" stroke-width="4"/><path class="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4z"/></svg>
-                    Spawning...
-                  </span>
-                </button>
-              </div>
-            </div>
-
-            <!-- Active swarms -->
-            <div x-show="swarmActiveList.length > 0" class="mb-4">
-              <h4 class="text-sm font-medium text-neutral-500 mb-2">Active Swarms</h4>
-              <div class="space-y-2">
-                <template x-for="s in swarmActiveList" :key="s.id">
-                  <div class="bg-blue-50 dark:bg-blue-900/10 border border-blue-200 dark:border-blue-800 rounded-lg p-3 cursor-pointer hover:bg-blue-100 dark:hover:bg-blue-900/20 transition-colors" @click="viewSwarmDetail(s.id)">
-                    <div class="flex items-center justify-between mb-1">
-                      <span class="font-medium text-sm text-blue-700 dark:text-blue-300" x-text="s.templateName"></span>
-                      <div class="flex items-center gap-2">
-                        <span class="text-xs text-blue-500">
-                          <span x-text="s.stepsCompleted"></span>/<span x-text="s.stepsTotal"></span> steps
-                        </span>
-                        <button @click.stop="cancelSwarm(s.id)" class="text-xs text-red-500 hover:text-red-400">Cancel</button>
-                      </div>
-                    </div>
-                    <p class="text-xs text-neutral-600 dark:text-neutral-400 truncate" x-text="s.task"></p>
-                    <div class="mt-2 h-1.5 bg-neutral-200 dark:bg-neutral-700 rounded-full overflow-hidden">
-                      <div class="h-full bg-blue-500 rounded-full transition-all duration-500" :style="'width: ' + (s.stepsTotal > 0 ? Math.round(s.stepsCompleted / s.stepsTotal * 100) : 0) + '%'"></div>
-                    </div>
-                  </div>
-                </template>
-              </div>
-            </div>
-
-            <!-- History -->
-            <div x-show="swarmHistory.length > 0">
-              <h4 class="text-sm font-medium text-neutral-500 mb-2">Recent Swarms</h4>
-              <div class="space-y-1.5">
-                <template x-for="s in swarmHistory" :key="s.id">
-                  <div class="flex items-center justify-between bg-neutral-50 dark:bg-neutral-800/50 border border-neutral-200 dark:border-neutral-700 rounded-lg px-3 py-2 cursor-pointer hover:bg-neutral-100 dark:hover:bg-neutral-800 transition-colors" @click="viewSwarmDetail(s.id)">
-                    <div class="flex items-center gap-2 min-w-0">
-                      <span class="text-xs font-mono" :class="swarmStatusColor(s.status)" x-text="swarmStrategyIcon(s.strategy)"></span>
-                      <span class="text-sm font-medium truncate" x-text="s.templateName"></span>
-                      <span class="text-xs text-neutral-500 truncate" x-text="s.task"></span>
-                    </div>
-                    <div class="flex items-center gap-3 flex-shrink-0 ml-3">
-                      <span class="text-xs" :class="swarmStatusColor(s.status)" x-text="s.status"></span>
-                      <span class="text-[10px] text-neutral-500" x-text="'$' + (s.totalCostUsd || 0).toFixed(4)"></span>
-                    </div>
-                  </div>
-                </template>
-              </div>
-            </div>
-
-            <div class="mt-4 flex justify-end">
-              <button @click="showSwarmModal = false" class="bg-neutral-100 dark:bg-neutral-800 hover:bg-neutral-200 dark:hover:bg-neutral-700 text-neutral-700 dark:text-neutral-300 px-4 py-2.5 rounded-lg font-medium border border-neutral-300 dark:border-neutral-700 transition-colors">Close</button>
-            </div>
-          </div>
-        </template>
-      </div>
-    </div>
-
-    <!-- Multi-Model Configuration Modal -->
-    <div x-show="showModelsModal" x-cloak class="fixed inset-0 bg-black/50 dark:bg-black/70 flex items-center justify-center z-50" @click.self="showModelsModal = false">
-      <div class="bg-white dark:bg-neutral-900 border border-neutral-200 dark:border-neutral-800 rounded-xl p-6 w-full max-w-2xl mx-4 shadow-xl dark:shadow-none max-h-[85vh] overflow-y-auto">
-        <div class="flex items-center justify-between mb-3">
-          <h3 class="text-lg font-semibold">Multi-Model Configuration</h3>
-          <button @click="showModelsModal = false" class="text-neutral-400 hover:text-neutral-600 dark:hover:text-neutral-300">
-            <svg class="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M6 18L18 6M6 6l12 12"/></svg>
-          </button>
-        </div>
-        <p class="text-sm text-neutral-500 dark:text-neutral-400 mb-4">Configure multiple models for cost efficiency. Use a capable model for complex tasks and a cheaper one for simple conversations.</p>
-
-        <div class="bg-purple-50 dark:bg-purple-900/20 border border-purple-200 dark:border-purple-800 rounded-lg p-3 mb-4 text-xs text-purple-700 dark:text-purple-300">
-          <strong>Cost Tip:</strong> Set a fast/cheap model (e.g. <code class="bg-purple-100 dark:bg-purple-800/50 px-1 rounded">openai/gpt-4.1-mini</code>) as fallback and a capable model (e.g. <code class="bg-purple-100 dark:bg-purple-800/50 px-1 rounded">anthropic/claude-sonnet-4</code>) as primary. Simple chats use the cheap model; complex coding uses the primary.
+        <div class="bg-purple-500/5 border border-purple-500/10 rounded-xl p-3 mb-5 text-xs text-purple-700 dark:text-purple-300 leading-relaxed">
+          <strong>Cost optimization:</strong> Set a capable model as primary and a cheaper model as fallback. Complex tasks use the primary; simple chats use the fallback.
         </div>
 
         <div class="space-y-4">
           <div>
-            <label class="block text-xs uppercase tracking-wide text-neutral-500 font-medium mb-2">Primary Model (default)</label>
-            <input x-model="primaryModel" type="text" placeholder="e.g. anthropic/claude-sonnet-4, openai/gpt-4.1" class="w-full bg-neutral-50 dark:bg-neutral-800 border border-neutral-300 dark:border-neutral-700 rounded-lg px-4 py-3 text-sm placeholder-neutral-400 dark:placeholder-neutral-600 focus:outline-none focus:border-purple-500 transition-colors" />
-            <p class="text-xs text-neutral-500 mt-1">Used for complex tasks, code generation, and analysis</p>
+            <label class="block text-xs uppercase tracking-wider text-neutral-500 font-semibold mb-2">Primary Model</label>
+            <input x-model="primaryModel" type="text" placeholder="e.g. anthropic/claude-sonnet-4" class="w-full bg-neutral-50 dark:bg-white/[0.04] border border-neutral-200 dark:border-white/[0.08] rounded-xl px-4 py-3 text-sm focus:outline-none input-focus focus:border-purple-500 transition-all" />
+            <p class="text-xs text-neutral-500 mt-1">For complex coding, analysis, and reasoning</p>
           </div>
-
           <div>
-            <label class="block text-xs uppercase tracking-wide text-neutral-500 font-medium mb-2">Fallback Model (cost saver)</label>
-            <input x-model="fallbackModel" type="text" placeholder="e.g. openai/gpt-4.1-mini, anthropic/claude-haiku-4" class="w-full bg-neutral-50 dark:bg-neutral-800 border border-neutral-300 dark:border-neutral-700 rounded-lg px-4 py-3 text-sm placeholder-neutral-400 dark:placeholder-neutral-600 focus:outline-none focus:border-purple-500 transition-colors" />
-            <p class="text-xs text-neutral-500 mt-1">Used for simple chats, summaries, and low-complexity tasks</p>
+            <label class="block text-xs uppercase tracking-wider text-neutral-500 font-semibold mb-2">Fallback Model</label>
+            <input x-model="fallbackModel" type="text" placeholder="e.g. openai/gpt-4.1-mini" class="w-full bg-neutral-50 dark:bg-white/[0.04] border border-neutral-200 dark:border-white/[0.08] rounded-xl px-4 py-3 text-sm focus:outline-none input-focus focus:border-purple-500 transition-all" />
+            <p class="text-xs text-neutral-500 mt-1">For simple chats and summaries (lower cost)</p>
           </div>
-
           <div>
             <div class="flex items-center justify-between mb-2">
-              <label class="block text-xs uppercase tracking-wide text-neutral-500 font-medium">Custom Providers (optional)</label>
-              <button @click="addCustomProvider()" class="text-xs text-purple-600 dark:text-purple-400 hover:text-purple-500">+ Add Provider</button>
+              <label class="text-xs uppercase tracking-wider text-neutral-500 font-semibold">Custom Providers</label>
+              <button @click="addCustomProvider()" class="text-xs text-purple-500 hover:text-purple-400 font-medium">+ Add</button>
             </div>
-            <p class="text-xs text-neutral-500 mb-3">Add OpenAI-compatible endpoints (Ollama, vLLM, LiteLLM, etc.)</p>
-
             <template x-for="(p, idx) in customProviders" :key="idx">
-              <div class="bg-neutral-50 dark:bg-neutral-800/50 border border-neutral-200 dark:border-neutral-700 rounded-lg p-3 mb-2 space-y-2">
+              <div class="bg-neutral-50 dark:bg-white/[0.02] border border-neutral-200 dark:border-white/[0.06] rounded-xl p-3 mb-2 space-y-2">
                 <div class="flex items-center justify-between">
-                  <span class="text-xs font-medium text-neutral-500">Provider <span x-text="idx + 1"></span></span>
+                  <span class="text-xs text-neutral-500">Provider <span x-text="idx + 1"></span></span>
                   <button @click="removeCustomProvider(idx)" class="text-xs text-red-500 hover:text-red-400">Remove</button>
                 </div>
-                <input x-model="p.id" type="text" placeholder="Provider ID (e.g. ollama, local-vllm)" class="w-full bg-white dark:bg-neutral-900 border border-neutral-300 dark:border-neutral-700 rounded px-3 py-2 text-sm" />
-                <input x-model="p.baseUrl" type="text" placeholder="Base URL (e.g. http://localhost:11434/v1)" class="w-full bg-white dark:bg-neutral-900 border border-neutral-300 dark:border-neutral-700 rounded px-3 py-2 text-sm" />
-                <input x-model="p.apiKeyEnvVar" type="text" placeholder="API key env var (e.g. OLLAMA_API_KEY, optional)" class="w-full bg-white dark:bg-neutral-900 border border-neutral-300 dark:border-neutral-700 rounded px-3 py-2 text-sm" />
-                <input x-model="p.models" type="text" placeholder="Models (comma-sep, e.g. llama3.1,codellama)" class="w-full bg-white dark:bg-neutral-900 border border-neutral-300 dark:border-neutral-700 rounded px-3 py-2 text-sm" />
+                <input x-model="p.id" type="text" placeholder="ID (e.g. ollama)" class="w-full bg-white dark:bg-white/[0.04] border border-neutral-200 dark:border-white/[0.08] rounded-lg px-3 py-2 text-sm" />
+                <input x-model="p.baseUrl" type="text" placeholder="Base URL (e.g. http://localhost:11434/v1)" class="w-full bg-white dark:bg-white/[0.04] border border-neutral-200 dark:border-white/[0.08] rounded-lg px-3 py-2 text-sm" />
+                <input x-model="p.apiKeyEnvVar" type="text" placeholder="API key env var (optional)" class="w-full bg-white dark:bg-white/[0.04] border border-neutral-200 dark:border-white/[0.08] rounded-lg px-3 py-2 text-sm" />
+                <input x-model="p.models" type="text" placeholder="Models (comma-sep)" class="w-full bg-white dark:bg-white/[0.04] border border-neutral-200 dark:border-white/[0.08] rounded-lg px-3 py-2 text-sm" />
               </div>
             </template>
           </div>
-
-          <div x-show="currentModelsRaw" class="bg-neutral-100 dark:bg-neutral-950 border border-neutral-200 dark:border-neutral-800 rounded-lg p-3">
-            <label class="block text-xs uppercase tracking-wide text-neutral-500 font-medium mb-2">Current Model Config</label>
-            <pre class="font-mono text-xs text-neutral-600 dark:text-neutral-400 whitespace-pre-wrap max-h-32 overflow-y-auto" x-text="currentModelsRaw"></pre>
+          <div x-show="currentModelsRaw" class="bg-black/[0.02] dark:bg-black/30 border border-neutral-200 dark:border-white/[0.06] rounded-xl p-3">
+            <label class="block text-xs uppercase tracking-wider text-neutral-500 font-semibold mb-2">Current Config</label>
+            <pre class="font-mono text-xs text-neutral-500 whitespace-pre-wrap max-h-28 overflow-y-auto" x-text="currentModelsRaw"></pre>
           </div>
         </div>
-
         <div class="flex gap-3 mt-5">
-          <button @click="saveModels()" :disabled="modelsLoading" class="flex-1 bg-purple-600 hover:bg-purple-700 disabled:opacity-50 disabled:cursor-not-allowed text-white px-4 py-3 rounded-lg font-medium transition-colors">
+          <button @click="saveModels()" :disabled="modelsLoading" class="flex-1 bg-purple-500 hover:bg-purple-600 disabled:opacity-50 text-white px-4 py-2.5 rounded-xl font-medium transition-colors text-sm">
             <span x-show="!modelsLoading">Save & Apply</span>
-            <span x-show="modelsLoading" class="flex items-center justify-center gap-2">
-              <svg class="animate-spin w-4 h-4" fill="none" viewBox="0 0 24 24"><circle class="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" stroke-width="4"/><path class="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4z"/></svg>
-              Saving...
-            </span>
+            <span x-show="modelsLoading" class="flex items-center justify-center gap-2"><svg class="animate-spin w-4 h-4" fill="none" viewBox="0 0 24 24"><circle class="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" stroke-width="4"/><path class="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4z"/></svg>Saving...</span>
           </button>
-          <button @click="showModelsModal = false" class="bg-neutral-100 dark:bg-neutral-800 hover:bg-neutral-200 dark:hover:bg-neutral-700 text-neutral-700 dark:text-neutral-300 px-4 py-3 rounded-lg font-medium border border-neutral-300 dark:border-neutral-700 transition-colors">Cancel</button>
+          <button @click="showModelsModal = false" class="bg-neutral-100 dark:bg-white/[0.06] hover:bg-neutral-200 dark:hover:bg-white/[0.08] text-neutral-700 dark:text-neutral-300 px-4 py-2.5 rounded-xl font-medium transition-colors text-sm">Cancel</button>
         </div>
+      </div>
+    </div>
+
+    <!-- Swarm Modal (simplified - keeps all functionality) -->
+    <div x-show="showSwarmModal" x-cloak class="fixed inset-0 bg-black/60 dark:bg-black/80 flex items-center justify-center z-50 backdrop-blur-sm" @click.self="showSwarmModal = false">
+      <div class="bg-white dark:bg-[#141419] border border-neutral-200 dark:border-white/[0.08] rounded-2xl p-6 w-full max-w-3xl mx-4 shadow-2xl max-h-[90vh] overflow-y-auto">
+        <div class="flex items-center justify-between mb-4">
+          <h3 class="text-lg font-bold">Agent Swarms</h3>
+          <button @click="showSwarmModal = false" class="text-neutral-400 hover:text-neutral-600 dark:hover:text-neutral-300"><svg class="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M6 18L18 6M6 6l12 12"/></svg></button>
+        </div>
+
+        <template x-if="swarmDetailId && swarmDetail">
+          <div>
+            <button @click="swarmDetailId = null; swarmDetail = null" class="text-sm text-orange-500 hover:text-orange-400 mb-3 flex items-center gap-1">
+              <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M15 19l-7-7 7-7"/></svg>Back
+            </button>
+            <div class="bg-neutral-50 dark:bg-white/[0.02] border border-neutral-200 dark:border-white/[0.06] rounded-xl p-4 mb-4">
+              <div class="flex items-center justify-between mb-2">
+                <span class="font-semibold" x-text="swarmDetail.templateName"></span>
+                <span class="text-xs px-2 py-1 rounded-full" :class="swarmDetail.status === 'running' ? 'bg-blue-500/10 text-blue-500' : swarmDetail.status === 'completed' ? 'bg-emerald-500/10 text-emerald-500' : 'bg-red-500/10 text-red-500'" x-text="swarmDetail.status"></span>
+              </div>
+              <p class="text-sm text-neutral-500 mb-2" x-text="swarmDetail.task"></p>
+              <div class="flex gap-4 text-xs text-neutral-500">
+                <span>Strategy: <strong x-text="swarmDetail.strategy"></strong></span>
+                <span>Cost: $<span x-text="(swarmDetail.totalCostUsd || 0).toFixed(4)"></span></span>
+              </div>
+            </div>
+            <div class="space-y-2">
+              <template x-for="(s, i) in swarmDetail.steps" :key="i">
+                <div class="bg-neutral-50 dark:bg-white/[0.02] border border-neutral-200 dark:border-white/[0.06] rounded-xl p-3">
+                  <div class="flex items-center justify-between mb-1">
+                    <span class="text-sm font-medium" x-text="'#' + (i+1) + ' ' + s.agentName"></span>
+                    <span class="text-xs" :class="swarmStatusColor(s.status)" x-text="s.status"></span>
+                  </div>
+                  <p class="text-xs text-neutral-500" x-text="s.instruction"></p>
+                  <div x-show="s.output" class="mt-2 bg-black/[0.02] dark:bg-black/30 rounded-lg p-2 text-xs font-mono text-neutral-500 max-h-32 overflow-y-auto whitespace-pre-wrap" x-text="s.output"></div>
+                </div>
+              </template>
+            </div>
+            <div x-show="swarmDetail.result" class="mt-4 bg-neutral-50 dark:bg-white/[0.02] border border-neutral-200 dark:border-white/[0.06] rounded-xl p-3 text-sm max-h-48 overflow-y-auto whitespace-pre-wrap" x-text="swarmDetail.result"></div>
+            <div class="flex gap-3 mt-4">
+              <button x-show="swarmDetail.status === 'running'" @click="cancelSwarm(swarmDetail.id)" class="bg-red-500 hover:bg-red-600 text-white px-4 py-2 rounded-xl text-sm font-medium">Cancel</button>
+              <button x-show="swarmDetail.status === 'running'" @click="viewSwarmDetail(swarmDetail.id)" class="bg-neutral-100 dark:bg-white/[0.06] text-neutral-700 dark:text-neutral-300 px-4 py-2 rounded-xl text-sm font-medium">Refresh</button>
+            </div>
+          </div>
+        </template>
+
+        <template x-if="!swarmDetailId">
+          <div>
+            <div x-show="swarmStats" class="flex items-center gap-4 bg-neutral-50 dark:bg-white/[0.02] border border-neutral-200 dark:border-white/[0.06] rounded-xl px-4 py-2.5 mb-4 text-xs">
+              <span class="text-neutral-500">Total: <strong x-text="swarmStats?.total || 0"></strong></span>
+              <span class="text-blue-500">Active: <strong x-text="swarmStats?.active || 0"></strong></span>
+              <span class="text-emerald-500">Done: <strong x-text="swarmStats?.completed || 0"></strong></span>
+              <span class="text-neutral-500 ml-auto">$<strong x-text="(swarmStats?.totalCostUsd || 0).toFixed(4)"></strong></span>
+            </div>
+            <div class="bg-orange-500/5 border border-orange-500/10 rounded-xl p-4 mb-4 space-y-3">
+              <select x-model="swarmSelectedTemplate" class="w-full bg-white dark:bg-white/[0.04] border border-neutral-200 dark:border-white/[0.08] rounded-xl px-3 py-2.5 text-sm">
+                <template x-for="t in swarmTemplates" :key="t.id"><option :value="t.id" x-text="t.name + ' (' + t.strategy + ') — ' + t.description"></option></template>
+              </select>
+              <textarea x-model="swarmTask" rows="2" placeholder="Describe the task..." class="w-full bg-white dark:bg-white/[0.04] border border-neutral-200 dark:border-white/[0.08] rounded-xl px-3 py-2.5 text-sm resize-none"></textarea>
+              <button @click="spawnSwarm()" :disabled="swarmLoading || !swarmTask.trim()" class="w-full bg-orange-500 hover:bg-orange-600 disabled:opacity-50 text-white px-4 py-2.5 rounded-xl font-medium transition-colors text-sm">
+                <span x-show="!swarmLoading">Launch Swarm</span><span x-show="swarmLoading">Spawning...</span>
+              </button>
+            </div>
+            <div x-show="swarmActiveList.length > 0" class="mb-4 space-y-2">
+              <h4 class="text-xs uppercase tracking-wider text-neutral-500 font-semibold">Active</h4>
+              <template x-for="s in swarmActiveList" :key="s.id">
+                <div class="bg-blue-500/5 border border-blue-500/10 rounded-xl p-3 cursor-pointer hover:bg-blue-500/10 transition-colors" @click="viewSwarmDetail(s.id)">
+                  <div class="flex items-center justify-between mb-1">
+                    <span class="font-medium text-sm" x-text="s.templateName"></span>
+                    <span class="text-xs text-blue-500"><span x-text="s.stepsCompleted"></span>/<span x-text="s.stepsTotal"></span></span>
+                  </div>
+                  <div class="h-1 bg-neutral-200 dark:bg-white/[0.06] rounded-full overflow-hidden mt-2"><div class="h-full bg-blue-500 rounded-full transition-all" :style="'width:' + (s.stepsTotal > 0 ? Math.round(s.stepsCompleted/s.stepsTotal*100) : 0) + '%'"></div></div>
+                </div>
+              </template>
+            </div>
+            <div x-show="swarmHistory.length > 0" class="space-y-1.5">
+              <h4 class="text-xs uppercase tracking-wider text-neutral-500 font-semibold mb-2">History</h4>
+              <template x-for="s in swarmHistory" :key="s.id">
+                <div class="flex items-center justify-between bg-neutral-50 dark:bg-white/[0.02] border border-neutral-200 dark:border-white/[0.06] rounded-xl px-3 py-2 cursor-pointer hover:bg-neutral-100 dark:hover:bg-white/[0.04] transition-colors" @click="viewSwarmDetail(s.id)">
+                  <span class="text-sm font-medium" x-text="s.templateName"></span>
+                  <span class="text-xs" :class="swarmStatusColor(s.status)" x-text="s.status"></span>
+                </div>
+              </template>
+            </div>
+          </div>
+        </template>
       </div>
     </div>
 
     <!-- Footer -->
-    <div class="text-center text-xs text-neutral-400 dark:text-neutral-600 py-8 mt-4">
-      OpenClaw Railway Template · <a href="/healthz" class="hover:text-neutral-600 dark:hover:text-neutral-400 underline">Health Check</a> · <a href="/dashboard" class="hover:text-neutral-600 dark:hover:text-neutral-400 underline">Dashboard</a>
+    <div class="text-center text-[11px] text-neutral-400 dark:text-neutral-600 py-8 mt-6">
+      OpenClaw Railway Template
     </div>
   </div>
 </body>

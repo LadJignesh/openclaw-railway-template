@@ -669,6 +669,55 @@ app.get("/setup/api/status", requireSetupAuth, async (_req, res) => {
     },
   ];
 
+  // Build available models per provider group based on env vars + known defaults
+  const providerModels = {
+    anthropic: [
+      { value: "anthropic/claude-sonnet-4-20250514", label: "Claude Sonnet 4 (recommended)", tier: "mid" },
+      { value: "anthropic/claude-3-5-sonnet-20241022", label: "Claude 3.5 Sonnet", tier: "mid" },
+      { value: "anthropic/claude-3-5-haiku-20241022", label: "Claude 3.5 Haiku (budget)", tier: "low" },
+      { value: "anthropic/claude-3-haiku-20250307", label: "Claude 3 Haiku (cheapest)", tier: "low" },
+      { value: "anthropic/claude-3-opus-20250219", label: "Claude 3 Opus (premium)", tier: "high" },
+    ],
+    openai: [
+      { value: "openai/gpt-4o", label: "GPT-4o (recommended)", tier: "mid" },
+      { value: "openai/gpt-4o-mini", label: "GPT-4o Mini (budget)", tier: "low" },
+      { value: "openai/o3-mini", label: "o3-mini (reasoning)", tier: "mid" },
+    ],
+    google: [
+      { value: "google/gemini-2.5-pro", label: "Gemini 2.5 Pro", tier: "mid" },
+      { value: "google/gemini-2.5-flash", label: "Gemini 2.5 Flash (budget)", tier: "low" },
+    ],
+    openrouter: [
+      { value: "anthropic/claude-sonnet-4-20250514", label: "Claude Sonnet 4 (via OpenRouter)", tier: "mid" },
+      { value: "anthropic/claude-3-5-sonnet-20241022", label: "Claude 3.5 Sonnet (via OpenRouter)", tier: "mid" },
+      { value: "openai/gpt-4o", label: "GPT-4o (via OpenRouter)", tier: "mid" },
+      { value: "google/gemini-2.5-pro", label: "Gemini 2.5 Pro (via OpenRouter)", tier: "mid" },
+      { value: "openai/gpt-4o-mini", label: "GPT-4o Mini (via OpenRouter)", tier: "low" },
+    ],
+    moonshot: [
+      { value: "moonshot/kimi-k2", label: "Kimi K2", tier: "mid" },
+    ],
+    minimax: [
+      { value: "minimax/m2.1", label: "MiniMax M2.1", tier: "mid" },
+      { value: "minimax/m2.1-lightning", label: "MiniMax M2.1 Lightning", tier: "low" },
+    ],
+    qwen: [
+      { value: "qwen/qwen3-235b-a22b", label: "Qwen3 235B", tier: "mid" },
+    ],
+    copilot: [
+      { value: "copilot/gpt-4o", label: "GPT-4o (via Copilot)", tier: "mid" },
+    ],
+  };
+
+  // Detect available API keys from environment
+  const detectedProviders = [];
+  if (process.env.ANTHROPIC_API_KEY) detectedProviders.push("anthropic");
+  if (process.env.OPENAI_API_KEY) detectedProviders.push("openai");
+  if (process.env.OPENROUTER_API_KEY) detectedProviders.push("openrouter");
+  if (process.env.GOOGLE_CREDENTIALS_JSON || process.env.GEMINI_API_KEY) detectedProviders.push("google");
+  if (process.env.MOONSHOT_API_KEY) detectedProviders.push("moonshot");
+  if (process.env.MINIMAX_API_KEY) detectedProviders.push("minimax");
+
   res.json({
     configured: isConfigured(),
     gatewayTarget: GATEWAY_TARGET,
@@ -676,6 +725,8 @@ app.get("/setup/api/status", requireSetupAuth, async (_req, res) => {
     channelsAddHelp: channelsHelp,
     authGroups,
     tuiEnabled: ENABLE_WEB_TUI,
+    providerModels,
+    detectedProviders,
   });
 });
 
