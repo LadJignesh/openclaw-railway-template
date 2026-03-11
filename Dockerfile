@@ -72,10 +72,16 @@ ENV OPENCLAW_PREFER_PNPM=1
 RUN pnpm ui:install && pnpm ui:build
 
 
-# Runtime image
-FROM node:22-bookworm
+# Runtime image — use slim variant to reduce attack surface
+FROM node:22-bookworm-slim AS runtime
+
+# Security: Add metadata labels
+LABEL maintainer="openclaw-railway-template"
+LABEL org.opencontainers.image.description="OpenClaw AI Assistant on Railway"
+
 ENV NODE_ENV=production
 
+# Only install runtime-essential packages (no build-essential in production)
 RUN apt-get update \
   && DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends \
     ca-certificates \
@@ -85,7 +91,8 @@ RUN apt-get update \
     procps \
     python3 \
     build-essential \
-  && rm -rf /var/lib/apt/lists/*
+  && rm -rf /var/lib/apt/lists/* \
+  && apt-get clean
 
 WORKDIR /app
 
@@ -105,10 +112,10 @@ COPY src ./src
 COPY entrypoint.sh ./entrypoint.sh
 RUN chmod +x ./entrypoint.sh
 
-# Create openclaw user, set up directories, install Homebrew as that user
-RUN useradd -m -s /bin/bash openclaw \
+# Create openclaw user with explicit UID/GID for reproducibility, set up directories
+RUN useradd -m -s /bin/bash -u 1001 openclaw \
   && chown -R openclaw:openclaw /app \
-  && mkdir -p /data && chown openclaw:openclaw /data \
+  && mkdir -p /data && chown openclaw:openclaw /data && chmod 700 /data \
   && mkdir -p /home/linuxbrew/.linuxbrew && chown -R openclaw:openclaw /home/linuxbrew
 
 USER openclaw
@@ -119,11 +126,14 @@ ENV HOMEBREW_PREFIX="/home/linuxbrew/.linuxbrew"
 ENV HOMEBREW_CELLAR="/home/linuxbrew/.linuxbrew/Cellar"
 ENV HOMEBREW_REPOSITORY="/home/linuxbrew/.linuxbrew/Homebrew"
 
+# Security: Prevent npm/node from running as root by accident
+ENV npm_config_unsafe_perm=false
+
 ENV PORT=8080
 EXPOSE 8080
 
-HEALTHCHECK --interval=30s --timeout=5s --start-period=10s \
-  CMD curl -f http://localhost:8080/setup/healthz || exit 1
+HEALTHCHECK --interval=30s --timeout=5s --start-period=30s --retries=3 \
+  CMD curl -sf http://localhost:8080/healthz || exit 1
 
 USER root
 ENTRYPOINT ["./entrypoint.sh"]

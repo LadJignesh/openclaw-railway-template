@@ -19,6 +19,19 @@ const WORKSPACE_DIR =
 
 const SETUP_PASSWORD = process.env.SETUP_PASSWORD?.trim();
 
+// Warn at startup if SETUP_PASSWORD is weak (but don't block — user may be in dev mode)
+if (SETUP_PASSWORD && SETUP_PASSWORD.length < 12) {
+  console.warn(
+    "[security] SETUP_PASSWORD is shorter than 12 characters. " +
+    "Use a stronger password for production deployments (e.g. Railway ${{ secret(32) }}).",
+  );
+}
+if (!SETUP_PASSWORD) {
+  console.warn(
+    "[security] SETUP_PASSWORD is not set. The /setup wizard will be inaccessible.",
+  );
+}
+
 // Debug logging helper
 const DEBUG = process.env.OPENCLAW_TEMPLATE_DEBUG?.toLowerCase() === "true";
 function debug(...args) {
@@ -407,14 +420,85 @@ try {
 
 const app = express();
 app.disable("x-powered-by");
+
+// ========== SECURITY HEADERS ==========
+app.use((_req, res, next) => {
+  // Prevent clickjacking — only allow same-origin framing
+  res.setHeader("X-Frame-Options", "SAMEORIGIN");
+  // Prevent MIME-type sniffing
+  res.setHeader("X-Content-Type-Options", "nosniff");
+  // Enable XSS filter in older browsers
+  res.setHeader("X-XSS-Protection", "1; mode=block");
+  // Strict referrer policy — don't leak URLs to third parties
+  res.setHeader("Referrer-Policy", "strict-origin-when-cross-origin");
+  // Restrict browser features (camera, microphone, geolocation, etc.)
+  res.setHeader(
+    "Permissions-Policy",
+    "camera=(), microphone=(), geolocation=(), payment=()",
+  );
+  // HSTS — enforce HTTPS (Railway terminates TLS at the edge)
+  if (process.env.RAILWAY_PUBLIC_DOMAIN) {
+    res.setHeader(
+      "Strict-Transport-Security",
+      "max-age=31536000; includeSubDomains",
+    );
+  }
+  // Content Security Policy for setup pages (restrictive default)
+  if (_req.path.startsWith("/setup") || _req.path === "/tui") {
+    res.setHeader(
+      "Content-Security-Policy",
+      [
+        "default-src 'self'",
+        "script-src 'self' 'unsafe-inline' 'unsafe-eval' https://cdn.jsdelivr.net https://unpkg.com",
+        "style-src 'self' 'unsafe-inline' https://cdn.jsdelivr.net https://fonts.googleapis.com",
+        "font-src 'self' https://fonts.gstatic.com",
+        "img-src 'self' data:",
+        "connect-src 'self'",
+        "frame-ancestors 'self'",
+      ].join("; "),
+    );
+  }
+  return next();
+});
+
 app.use(express.json({ limit: "1mb" }));
 
 // Minimal health endpoint for Railway.
 app.get("/setup/healthz", (_req, res) => res.json({ ok: true }));
 
+// ========== LIGHTWEIGHT RATE LIMITER FOR PUBLIC ENDPOINTS ==========
+const publicRateLimiter = {
+  hits: new Map(),
+  windowMs: 10_000,
+  maxHits: 30, // 30 req / 10s per IP
+  cleanup: setInterval(function () {
+    const now = Date.now();
+    for (const [ip, data] of publicRateLimiter.hits) {
+      if (now - data.windowStart > publicRateLimiter.windowMs) {
+        publicRateLimiter.hits.delete(ip);
+      }
+    }
+  }, 30_000),
+
+  check(ip) {
+    const now = Date.now();
+    const data = this.hits.get(ip);
+    if (!data || now - data.windowStart > this.windowMs) {
+      this.hits.set(ip, { windowStart: now, count: 1 });
+      return false;
+    }
+    data.count++;
+    return data.count > this.maxHits;
+  },
+};
+
 // Public health endpoint (no auth) so Railway can probe without /setup.
-// Keep this free of secrets.
-app.get("/healthz", async (_req, res) => {
+// Keep this free of secrets. Rate-limited to prevent abuse.
+app.get("/healthz", async (req, res) => {
+  const ip = req.ip || req.socket?.remoteAddress || "unknown";
+  if (publicRateLimiter.check(ip)) {
+    return res.status(429).type("text/plain").send("Too many requests");
+  }
   let gateway = "unconfigured";
   if (isConfigured()) {
     gateway = isGatewayReady() ? "ready" : "starting";
@@ -833,14 +917,34 @@ app.post("/setup/api/run", requireSetupAuth, async (req, res) => {
 
 function redactSecrets(text) {
   if (!text) return text;
-  // Very small best-effort redaction. (Config paths/values may still contain secrets.)
+  // Best-effort redaction for common API key and token patterns.
   return String(text)
-    .replace(/(sk-[A-Za-z0-9_-]{10,})/g, "[REDACTED]")
-    .replace(/(gho_[A-Za-z0-9_]{10,})/g, "[REDACTED]")
+    // OpenAI API keys (sk-proj-..., sk-...)
+    .replace(/(sk-(?:proj-)?[A-Za-z0-9_-]{10,})/g, "[REDACTED]")
+    // GitHub tokens (gho_, ghp_, ghs_, ghr_)
+    .replace(/(gh[opsr]_[A-Za-z0-9_]{10,})/g, "[REDACTED]")
+    // Slack tokens
     .replace(/(xox[baprs]-[A-Za-z0-9-]{10,})/g, "[REDACTED]")
-    // Telegram bot tokens look like: 123456:ABCDEF...
+    // Telegram bot tokens (123456:ABCDEF...)
     .replace(/(\d{5,}:[A-Za-z0-9_-]{10,})/g, "[REDACTED]")
-    .replace(/(AA[A-Za-z0-9_-]{10,}:\S{10,})/g, "[REDACTED]");
+    // Anthropic setup tokens (AA...:...)
+    .replace(/(AA[A-Za-z0-9_-]{10,}:\S{10,})/g, "[REDACTED]")
+    // Anthropic API keys (sk-ant-...)
+    .replace(/(sk-ant-[A-Za-z0-9_-]{10,})/g, "[REDACTED]")
+    // Google API keys (AIza...)
+    .replace(/(AIza[A-Za-z0-9_-]{30,})/g, "[REDACTED]")
+    // OpenRouter API keys (sk-or-...)
+    .replace(/(sk-or-[A-Za-z0-9_-]{10,})/g, "[REDACTED]")
+    // Discord bot tokens (base64-ish, long strings after "Bot ")
+    .replace(/((?:Bot\s+)?[A-Za-z0-9]{24,}\.[A-Za-z0-9_-]{6}\.[A-Za-z0-9_-]{27,})/g, "[REDACTED]")
+    // Generic bearer tokens in output (Bearer <token>)
+    .replace(/(Bearer\s+)[A-Za-z0-9_.-]{20,}/gi, "$1[REDACTED]")
+    // Gateway token (if it appears in output)
+    .replace(new RegExp(escapeRegExp(OPENCLAW_GATEWAY_TOKEN), "g"), "[REDACTED]");
+}
+
+function escapeRegExp(str) {
+  return str.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
 }
 
 // ========== WEB TUI: AUTH + SESSION MANAGEMENT ==========
@@ -1174,6 +1278,111 @@ app.get("/setup/api/debug", requireSetupAuth, async (_req, res) => {
   });
 });
 
+// ========== MULTI-MODEL CONFIGURATION FOR COST EFFICIENCY ==========
+// Allows configuring multiple AI models so cheaper models handle simple tasks
+// while expensive models handle complex ones — significant cost savings.
+
+app.get("/setup/api/models", requireSetupAuth, async (_req, res) => {
+  if (!isConfigured()) {
+    return res.json({ ok: false, error: "Not configured yet. Run setup first." });
+  }
+  const result = await runCmd(OPENCLAW_NODE, clawArgs(["config", "get", "models"]));
+  let models = null;
+  try {
+    models = JSON.parse(result.output.trim());
+  } catch {
+    // May return non-JSON — that's OK, we just show raw
+  }
+  return res.json({ ok: true, models, raw: result.output.trim() });
+});
+
+app.post("/setup/api/models", requireSetupAuth, async (req, res) => {
+  if (!isConfigured()) {
+    return res.status(400).json({ ok: false, error: "Not configured yet. Run setup first." });
+  }
+
+  const { primaryModel, fallbackModel, customProviders } = req.body || {};
+  let extra = "";
+
+  // Set primary model (the main/default model)
+  if (primaryModel?.trim()) {
+    const r = await runCmd(OPENCLAW_NODE, clawArgs(["models", "set", primaryModel.trim()]));
+    extra += `[models] primary=${primaryModel.trim()} exit=${r.code}\n${r.output || ""}`;
+  }
+
+  // Configure custom providers (e.g., Ollama, local vLLM, OpenRouter with specific models)
+  if (Array.isArray(customProviders) && customProviders.length > 0) {
+    for (const provider of customProviders) {
+      if (!provider.id?.trim() || !provider.baseUrl?.trim()) continue;
+
+      // Validate provider ID (alphanumeric + underscore + dash)
+      if (!/^[A-Za-z0-9_-]+$/.test(provider.id.trim())) {
+        extra += `[provider] skipped invalid ID: ${provider.id}\n`;
+        continue;
+      }
+
+      // Validate URL
+      try {
+        new URL(provider.baseUrl.trim());
+      } catch {
+        extra += `[provider] skipped invalid URL for ${provider.id}\n`;
+        continue;
+      }
+
+      const providerConfig = {
+        id: provider.id.trim(),
+        baseUrl: provider.baseUrl.trim(),
+      };
+      if (provider.apiKeyEnvVar?.trim()) {
+        providerConfig.apiKeyEnvVar = provider.apiKeyEnvVar.trim();
+      }
+      if (provider.models?.trim()) {
+        providerConfig.models = provider.models.trim().split(",").map(m => m.trim()).filter(Boolean);
+      }
+
+      const setResult = await runCmd(
+        OPENCLAW_NODE,
+        clawArgs([
+          "config",
+          "set",
+          "--json",
+          `providers.${provider.id.trim()}`,
+          JSON.stringify(providerConfig),
+        ]),
+      );
+      extra += `[provider] ${provider.id.trim()} exit=${setResult.code}\n`;
+    }
+  }
+
+  // Set fallback/secondary model for cost efficiency routing
+  if (fallbackModel?.trim()) {
+    // Configure as a model alias or routing rule depending on openclaw version
+    const r = await runCmd(
+      OPENCLAW_NODE,
+      clawArgs([
+        "config",
+        "set",
+        "--json",
+        "models.fallback",
+        JSON.stringify({ model: fallbackModel.trim() }),
+      ]),
+    );
+    extra += `[models] fallback=${fallbackModel.trim()} exit=${r.code}\n${r.output || ""}`;
+  }
+
+  // Restart gateway to pick up new model config
+  if (extra) {
+    try {
+      await restartGateway();
+      extra += "[gateway] restarted to apply model changes\n";
+    } catch (err) {
+      extra += `[gateway] restart failed: ${err.message}\n`;
+    }
+  }
+
+  return res.json({ ok: true, output: redactSecrets(extra) });
+});
+
 app.post("/setup/api/pairing/approve", requireSetupAuth, async (req, res) => {
   const { channel, code } = req.body || {};
   if (!channel || !code) {
@@ -1368,21 +1577,10 @@ proxy.on("proxyReqWs", (proxyReq, req, socket, options, head) => {
   proxyReq.setHeader("Origin", PROXY_ORIGIN);
 });
 
-// Auto-inject token into /openclaw browser GET requests so the Control UI works
-// without the user needing to know the gateway token.
-app.use((req, res, next) => {
-  if (
-    req.method === "GET" &&
-    (req.path === "/openclaw" || req.path.startsWith("/openclaw/")) &&
-    !req.query.token &&
-    !req.headers.authorization &&
-    !req.headers.upgrade // not a WebSocket upgrade
-  ) {
-    const sep = req.url.includes("?") ? "&" : "?";
-    return res.redirect(307, `${req.url}${sep}token=${encodeURIComponent(OPENCLAW_GATEWAY_TOKEN)}`);
-  }
-  return next();
-});
+// Token injection for /openclaw Control UI is handled by the proxy event handlers
+// (proxyReq/proxyReqWs) which inject the Authorization header server-side.
+// We do NOT redirect with ?token= in the URL to avoid leaking the gateway token
+// into browser history, server logs, and Referer headers.
 
 app.use(async (req, res) => {
   if (!isConfigured() && !req.path.startsWith("/setup")) {
@@ -1407,10 +1605,7 @@ app.use(async (req, res) => {
     }
   }
 
-  if (req.path === "/openclaw" && !req.query.token) {
-    return res.redirect(`/openclaw?token=${OPENCLAW_GATEWAY_TOKEN}`);
-  }
-
+  // Token is injected server-side via proxy event handlers — no URL leak needed.
   return proxy.web(req, res, { target: GATEWAY_TARGET });
 });
 
@@ -1506,6 +1701,9 @@ async function gracefulShutdown(signal) {
 
   if (setupRateLimiter.cleanupInterval) {
     clearInterval(setupRateLimiter.cleanupInterval);
+  }
+  if (publicRateLimiter.cleanup) {
+    clearInterval(publicRateLimiter.cleanup);
   }
 
   if (activeTuiSession) {

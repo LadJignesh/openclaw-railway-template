@@ -252,6 +252,68 @@
         }
       },
 
+      // Multi-model configuration state
+      showModelsModal: false,
+      modelsLoading: false,
+      primaryModel: '',
+      fallbackModel: '',
+      customProviders: [],
+      currentModelsRaw: '',
+
+      async openModelsModal() {
+        this.showModelsModal = true;
+        this.modelsLoading = true;
+        try {
+          const j = await this.httpJson('/setup/api/models');
+          this.currentModelsRaw = j.raw || JSON.stringify(j.models, null, 2) || '';
+        } catch (e) {
+          this.currentModelsRaw = 'Error loading models: ' + String(e);
+        } finally {
+          this.modelsLoading = false;
+        }
+      },
+
+      addCustomProvider() {
+        this.customProviders.push({ id: '', baseUrl: '', apiKeyEnvVar: '', models: '' });
+      },
+
+      removeCustomProvider(idx) {
+        this.customProviders.splice(idx, 1);
+      },
+
+      async saveModels() {
+        this.modelsLoading = true;
+        this.log += '\nConfiguring models...\n';
+        try {
+          const res = await fetch('/setup/api/models', {
+            method: 'POST',
+            credentials: 'same-origin',
+            headers: { 'content-type': 'application/json' },
+            body: JSON.stringify({
+              primaryModel: this.primaryModel,
+              fallbackModel: this.fallbackModel,
+              customProviders: this.customProviders.filter(p => p.id && p.baseUrl)
+            })
+          });
+          const t = await res.text();
+          let j;
+          try { j = JSON.parse(t); } catch (_e) { j = { ok: false, output: t }; }
+          this.log += (j.output || JSON.stringify(j, null, 2)) + '\n';
+          if (j.ok) {
+            this.log += '✓ Model configuration saved\n';
+          }
+          // Refresh current config
+          try {
+            const m = await this.httpJson('/setup/api/models');
+            this.currentModelsRaw = m.raw || JSON.stringify(m.models, null, 2) || '';
+          } catch {}
+        } catch (e) {
+          this.log += '✗ Error: ' + String(e) + '\n';
+        } finally {
+          this.modelsLoading = false;
+        }
+      },
+
       async runDoctor() {
         this.log = 'Running doctor...\n';
         this.loading = true;
@@ -318,7 +380,7 @@
         <h2 class="text-lg font-semibold mb-1">Setup Complete</h2>
         <p class="text-neutral-500 text-sm mb-6">Your OpenClaw instance is configured and running</p>
 
-        <div class="grid grid-cols-1 md:grid-cols-3 gap-4 mb-4">
+        <div class="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-4 mb-4">
           <div class="flex flex-col bg-amber-50 dark:bg-amber-900/20 rounded-xl p-4 border border-amber-200 dark:border-amber-800">
             <div class="flex items-center gap-3 mb-3">
               <div class="w-10 h-10 bg-amber-500/20 rounded-lg flex items-center justify-center">
@@ -352,6 +414,19 @@
                 Approve Channel Pairing
               </button>
             </div>
+          </div>
+
+          <div class="flex flex-col bg-purple-50 dark:bg-purple-900/20 rounded-xl p-4 border border-purple-200 dark:border-purple-800">
+            <div class="flex items-center gap-3 mb-3">
+              <div class="w-10 h-10 bg-purple-500/20 rounded-lg flex items-center justify-center">
+                <svg class="w-5 h-5 text-purple-600 dark:text-purple-400" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9.75 17L9 20l-1 1h8l-1-1-.75-3M3 13h18M5 17h14a2 2 0 002-2V5a2 2 0 00-2-2H5a2 2 0 00-2 2v10a2 2 0 002 2z"/></svg>
+              </div>
+              <span class="font-medium text-purple-700 dark:text-purple-300">Model Config</span>
+            </div>
+            <p class="text-sm text-purple-600/80 dark:text-purple-400/70 flex-1">Configure multiple AI models for cost efficiency — use cheaper models for simple tasks.</p>
+            <button @click="openModelsModal()" :disabled="loading" class="w-full mt-4 bg-purple-100 dark:bg-purple-900/40 hover:bg-purple-200 dark:hover:bg-purple-900/60 disabled:opacity-50 disabled:cursor-not-allowed text-purple-700 dark:text-purple-300 px-4 py-2.5 rounded-lg font-medium border border-purple-300 dark:border-purple-700 transition-colors">
+              Configure Models
+            </button>
           </div>
 
           <div class="flex flex-col bg-red-50 dark:bg-red-900/20 rounded-xl p-4 border border-red-200 dark:border-red-800">
@@ -623,6 +698,74 @@
 
         <div class="mt-4 flex justify-end">
           <button @click="showDevicesModal = false" class="bg-neutral-100 dark:bg-neutral-800 hover:bg-neutral-200 dark:hover:bg-neutral-700 text-neutral-700 dark:text-neutral-300 px-4 py-2.5 rounded-lg font-medium border border-neutral-300 dark:border-neutral-700 transition-colors">Close</button>
+        </div>
+      </div>
+    </div>
+
+    <!-- Multi-Model Configuration Modal -->
+    <div x-show="showModelsModal" x-cloak class="fixed inset-0 bg-black/50 dark:bg-black/70 flex items-center justify-center z-50" @click.self="showModelsModal = false">
+      <div class="bg-white dark:bg-neutral-900 border border-neutral-200 dark:border-neutral-800 rounded-xl p-6 w-full max-w-2xl mx-4 shadow-xl dark:shadow-none max-h-[85vh] overflow-y-auto">
+        <div class="flex items-center justify-between mb-3">
+          <h3 class="text-lg font-semibold">Multi-Model Configuration</h3>
+          <button @click="showModelsModal = false" class="text-neutral-400 hover:text-neutral-600 dark:hover:text-neutral-300">
+            <svg class="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M6 18L18 6M6 6l12 12"/></svg>
+          </button>
+        </div>
+        <p class="text-sm text-neutral-500 dark:text-neutral-400 mb-4">Configure multiple models for cost efficiency. Use a capable model for complex tasks and a cheaper one for simple conversations.</p>
+
+        <div class="bg-purple-50 dark:bg-purple-900/20 border border-purple-200 dark:border-purple-800 rounded-lg p-3 mb-4 text-xs text-purple-700 dark:text-purple-300">
+          <strong>Cost Tip:</strong> Set a fast/cheap model (e.g. <code class="bg-purple-100 dark:bg-purple-800/50 px-1 rounded">openai/gpt-4.1-mini</code>) as fallback and a capable model (e.g. <code class="bg-purple-100 dark:bg-purple-800/50 px-1 rounded">anthropic/claude-sonnet-4</code>) as primary. Simple chats use the cheap model; complex coding uses the primary.
+        </div>
+
+        <div class="space-y-4">
+          <div>
+            <label class="block text-xs uppercase tracking-wide text-neutral-500 font-medium mb-2">Primary Model (default)</label>
+            <input x-model="primaryModel" type="text" placeholder="e.g. anthropic/claude-sonnet-4, openai/gpt-4.1" class="w-full bg-neutral-50 dark:bg-neutral-800 border border-neutral-300 dark:border-neutral-700 rounded-lg px-4 py-3 text-sm placeholder-neutral-400 dark:placeholder-neutral-600 focus:outline-none focus:border-purple-500 transition-colors" />
+            <p class="text-xs text-neutral-500 mt-1">Used for complex tasks, code generation, and analysis</p>
+          </div>
+
+          <div>
+            <label class="block text-xs uppercase tracking-wide text-neutral-500 font-medium mb-2">Fallback Model (cost saver)</label>
+            <input x-model="fallbackModel" type="text" placeholder="e.g. openai/gpt-4.1-mini, anthropic/claude-haiku-4" class="w-full bg-neutral-50 dark:bg-neutral-800 border border-neutral-300 dark:border-neutral-700 rounded-lg px-4 py-3 text-sm placeholder-neutral-400 dark:placeholder-neutral-600 focus:outline-none focus:border-purple-500 transition-colors" />
+            <p class="text-xs text-neutral-500 mt-1">Used for simple chats, summaries, and low-complexity tasks</p>
+          </div>
+
+          <div>
+            <div class="flex items-center justify-between mb-2">
+              <label class="block text-xs uppercase tracking-wide text-neutral-500 font-medium">Custom Providers (optional)</label>
+              <button @click="addCustomProvider()" class="text-xs text-purple-600 dark:text-purple-400 hover:text-purple-500">+ Add Provider</button>
+            </div>
+            <p class="text-xs text-neutral-500 mb-3">Add OpenAI-compatible endpoints (Ollama, vLLM, LiteLLM, etc.)</p>
+
+            <template x-for="(p, idx) in customProviders" :key="idx">
+              <div class="bg-neutral-50 dark:bg-neutral-800/50 border border-neutral-200 dark:border-neutral-700 rounded-lg p-3 mb-2 space-y-2">
+                <div class="flex items-center justify-between">
+                  <span class="text-xs font-medium text-neutral-500">Provider <span x-text="idx + 1"></span></span>
+                  <button @click="removeCustomProvider(idx)" class="text-xs text-red-500 hover:text-red-400">Remove</button>
+                </div>
+                <input x-model="p.id" type="text" placeholder="Provider ID (e.g. ollama, local-vllm)" class="w-full bg-white dark:bg-neutral-900 border border-neutral-300 dark:border-neutral-700 rounded px-3 py-2 text-sm" />
+                <input x-model="p.baseUrl" type="text" placeholder="Base URL (e.g. http://localhost:11434/v1)" class="w-full bg-white dark:bg-neutral-900 border border-neutral-300 dark:border-neutral-700 rounded px-3 py-2 text-sm" />
+                <input x-model="p.apiKeyEnvVar" type="text" placeholder="API key env var (e.g. OLLAMA_API_KEY, optional)" class="w-full bg-white dark:bg-neutral-900 border border-neutral-300 dark:border-neutral-700 rounded px-3 py-2 text-sm" />
+                <input x-model="p.models" type="text" placeholder="Models (comma-sep, e.g. llama3.1,codellama)" class="w-full bg-white dark:bg-neutral-900 border border-neutral-300 dark:border-neutral-700 rounded px-3 py-2 text-sm" />
+              </div>
+            </template>
+          </div>
+
+          <div x-show="currentModelsRaw" class="bg-neutral-100 dark:bg-neutral-950 border border-neutral-200 dark:border-neutral-800 rounded-lg p-3">
+            <label class="block text-xs uppercase tracking-wide text-neutral-500 font-medium mb-2">Current Model Config</label>
+            <pre class="font-mono text-xs text-neutral-600 dark:text-neutral-400 whitespace-pre-wrap max-h-32 overflow-y-auto" x-text="currentModelsRaw"></pre>
+          </div>
+        </div>
+
+        <div class="flex gap-3 mt-5">
+          <button @click="saveModels()" :disabled="modelsLoading" class="flex-1 bg-purple-600 hover:bg-purple-700 disabled:opacity-50 disabled:cursor-not-allowed text-white px-4 py-3 rounded-lg font-medium transition-colors">
+            <span x-show="!modelsLoading">Save & Apply</span>
+            <span x-show="modelsLoading" class="flex items-center justify-center gap-2">
+              <svg class="animate-spin w-4 h-4" fill="none" viewBox="0 0 24 24"><circle class="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" stroke-width="4"/><path class="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4z"/></svg>
+              Saving...
+            </span>
+          </button>
+          <button @click="showModelsModal = false" class="bg-neutral-100 dark:bg-neutral-800 hover:bg-neutral-200 dark:hover:bg-neutral-700 text-neutral-700 dark:text-neutral-300 px-4 py-3 rounded-lg font-medium border border-neutral-300 dark:border-neutral-700 transition-colors">Cancel</button>
         </div>
       </div>
     </div>

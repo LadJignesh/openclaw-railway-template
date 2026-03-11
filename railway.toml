@@ -2,9 +2,18 @@
 builder = "dockerfile"
 
 [deploy]
-healthcheckPath = "/setup/healthz"
+# Use the public /healthz endpoint (no auth required) for Railway health checks
+healthcheckPath = "/healthz"
 healthcheckTimeout = 300
 restartPolicyType = "on_failure"
+restartPolicyMaxRetries = 5
 
 [variables]
 PORT = "8080"
+# Security: Directories must be under /data for Railway volume persistence
+OPENCLAW_STATE_DIR = "/data/.openclaw"
+OPENCLAW_WORKSPACE_DIR = "/data/workspace"
+# Security: Generate a strong random token for gateway auth stability across redeploys
+# OPENCLAW_GATEWAY_TOKEN = "${{ secret(64) }}"
+# Security: Set a strong setup password
+# SETUP_PASSWORD = "${{ secret(32) }}"
