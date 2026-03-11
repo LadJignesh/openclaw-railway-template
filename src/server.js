@@ -1292,6 +1292,414 @@ app.get("/setup/api/debug", requireSetupAuth, async (_req, res) => {
 // Allows configuring multiple AI models so cheaper models handle simple tasks
 // while expensive models handle complex ones — significant cost savings.
 
+// ========== SMART MODEL ROUTING ==========
+// Loads config/main.json (or custom config) and applies intelligent model selection
+// based on task complexity, token count, and attachment type.
+
+const CONFIG_DIR = path.join(process.cwd(), "config");
+
+function loadMainConfig() {
+  const cfgPath = path.join(CONFIG_DIR, "main.json");
+  try {
+    const raw = fs.readFileSync(cfgPath, "utf8");
+    return JSON.parse(raw);
+  } catch (err) {
+    console.warn(`[config] could not load config/main.json: ${err.code || err.message}`);
+    return null;
+  }
+}
+
+/**
+ * Smart model selection: picks optimal model based on task characteristics.
+ * Returns the model identifier string, or null to use the default.
+ */
+function selectModelForTask(mainConfig, taskHints = {}) {
+  if (!mainConfig?.models?.routing?.enabled) return null;
+
+  const rules = mainConfig.models.routing.rules || [];
+  const { inputTokens, complexity, hasAttachment, attachmentType } = taskHints;
+
+  for (const rule of rules) {
+    const cond = rule.condition || {};
+
+    // Token-count rule
+    if (cond.maxInputTokens != null && inputTokens != null) {
+      if (inputTokens <= cond.maxInputTokens) {
+        debug(`[routing] matched rule "${rule.name}" (tokens=${inputTokens} <= ${cond.maxInputTokens})`);
+        return rule.model;
+      }
+    }
+
+    // Attachment / multimodal rule
+    if (cond.hasAttachment && cond.attachmentType) {
+      if (hasAttachment && attachmentType === cond.attachmentType) {
+        debug(`[routing] matched rule "${rule.name}" (attachment=${attachmentType})`);
+        return rule.model;
+      }
+    }
+
+    // Complexity rule
+    if (cond.complexity && complexity) {
+      if (cond.complexity === complexity) {
+        debug(`[routing] matched rule "${rule.name}" (complexity=${complexity})`);
+        return rule.model;
+      }
+    }
+  }
+
+  return null; // no rule matched — use primary
+}
+
+// ========== DAILY COST TRACKER (in-memory, resets at midnight UTC) ==========
+const costTracker = {
+  dailySpendUsd: 0,
+  lastResetDate: new Date().toISOString().slice(0, 10),
+  alertSent: false,
+  // Per-model breakdown
+  modelStats: {},   // { [model]: { requests, inputTokens, outputTokens, costUsd } }
+  routingStats: {}, // { [ruleName]: hitCount }
+  // Hourly spend for sparkline charts (last 24 hours)
+  hourlySpend: [],  // [{ hour: "HH", costUsd, requests }]
+  startedAt: Date.now(),
+
+  _ensureModel(model) {
+    if (!this.modelStats[model]) {
+      this.modelStats[model] = { requests: 0, inputTokens: 0, outputTokens: 0, costUsd: 0 };
+    }
+  },
+
+  _currentHourKey() {
+    return new Date().toISOString().slice(11, 13); // "HH"
+  },
+
+  reset() {
+    const today = new Date().toISOString().slice(0, 10);
+    if (today !== this.lastResetDate) {
+      console.log(`[cost] daily reset: spent $${this.dailySpendUsd.toFixed(4)} on ${this.lastResetDate}`);
+      this.dailySpendUsd = 0;
+      this.lastResetDate = today;
+      this.alertSent = false;
+      this.modelStats = {};
+      this.routingStats = {};
+      this.hourlySpend = [];
+    }
+  },
+
+  recordRouting(ruleName) {
+    if (!ruleName) return;
+    this.routingStats[ruleName] = (this.routingStats[ruleName] || 0) + 1;
+  },
+
+  record(model, inputTokens, outputTokens, mainConfig) {
+    this.reset();
+    this._ensureModel(model);
+
+    const stats = this.modelStats[model];
+    stats.requests += 1;
+    stats.inputTokens += inputTokens;
+    stats.outputTokens += outputTokens;
+
+    const rates = mainConfig?.costTracking?.models?.[model];
+    let cost = 0;
+    if (rates) {
+      cost =
+        (inputTokens / 1_000_000) * (rates.inputPer1M || 0) +
+        (outputTokens / 1_000_000) * (rates.outputPer1M || 0);
+    }
+    stats.costUsd += cost;
+    this.dailySpendUsd += cost;
+
+    // Hourly tracking
+    const hk = this._currentHourKey();
+    let hourEntry = this.hourlySpend.find((h) => h.hour === hk);
+    if (!hourEntry) {
+      hourEntry = { hour: hk, costUsd: 0, requests: 0 };
+      this.hourlySpend.push(hourEntry);
+      // Keep max 24 entries
+      if (this.hourlySpend.length > 24) this.hourlySpend.shift();
+    }
+    hourEntry.costUsd += cost;
+    hourEntry.requests += 1;
+
+    const budget = mainConfig?.costTracking?.dailyBudgetUsd || 50;
+    const threshold = mainConfig?.costTracking?.alertThreshold || 0.8;
+
+    if (!this.alertSent && this.dailySpendUsd >= budget * threshold) {
+      console.warn(
+        `[cost] ⚠ Daily spend $${this.dailySpendUsd.toFixed(2)} reached ${Math.round(threshold * 100)}% of $${budget} budget`,
+      );
+      this.alertSent = true;
+    }
+
+    debug(`[cost] +$${cost.toFixed(4)} (${model}) — daily total: $${this.dailySpendUsd.toFixed(4)}`);
+  },
+
+  getSummary(mainConfig) {
+    this.reset();
+    const budget = mainConfig?.costTracking?.dailyBudgetUsd || 50;
+    return {
+      dailySpendUsd: Math.round(this.dailySpendUsd * 10000) / 10000,
+      dailyBudgetUsd: budget,
+      percentUsed: Math.round((this.dailySpendUsd / budget) * 10000) / 100,
+      date: this.lastResetDate,
+    };
+  },
+
+  getFullStats(mainConfig) {
+    this.reset();
+    const budget = mainConfig?.costTracking?.dailyBudgetUsd || 50;
+    const totalRequests = Object.values(this.modelStats).reduce((s, m) => s + m.requests, 0);
+    const totalInputTokens = Object.values(this.modelStats).reduce((s, m) => s + m.inputTokens, 0);
+    const totalOutputTokens = Object.values(this.modelStats).reduce((s, m) => s + m.outputTokens, 0);
+
+    return {
+      summary: {
+        dailySpendUsd: Math.round(this.dailySpendUsd * 10000) / 10000,
+        dailyBudgetUsd: budget,
+        percentUsed: Math.round((this.dailySpendUsd / budget) * 10000) / 100,
+        totalRequests,
+        totalInputTokens,
+        totalOutputTokens,
+        totalTokens: totalInputTokens + totalOutputTokens,
+        date: this.lastResetDate,
+        uptimeMs: Date.now() - this.startedAt,
+      },
+      modelBreakdown: Object.entries(this.modelStats).map(([model, s]) => ({
+        model,
+        requests: s.requests,
+        inputTokens: s.inputTokens,
+        outputTokens: s.outputTokens,
+        totalTokens: s.inputTokens + s.outputTokens,
+        costUsd: Math.round(s.costUsd * 10000) / 10000,
+        percentOfSpend: this.dailySpendUsd > 0
+          ? Math.round((s.costUsd / this.dailySpendUsd) * 10000) / 100
+          : 0,
+      })).sort((a, b) => b.costUsd - a.costUsd),
+      routingStats: Object.entries(this.routingStats).map(([rule, hits]) => ({
+        rule,
+        hits,
+      })).sort((a, b) => b.hits - a.hits),
+      hourlySpend: this.hourlySpend.map((h) => ({
+        hour: h.hour,
+        costUsd: Math.round(h.costUsd * 10000) / 10000,
+        requests: h.requests,
+      })),
+    };
+  },
+};
+
+// ========== CONFIG APPLY ENDPOINT ==========
+// Reads config/main.json and pushes all settings to openclaw via CLI.
+
+app.post("/setup/api/config/apply", requireSetupAuth, async (req, res) => {
+  if (!isConfigured()) {
+    return res.status(400).json({ ok: false, error: "Not configured yet. Run setup first." });
+  }
+
+  const mainConfig = loadMainConfig();
+  if (!mainConfig) {
+    return res.status(404).json({ ok: false, error: "config/main.json not found or invalid JSON" });
+  }
+
+  let extra = "";
+
+  // Apply primary model
+  if (mainConfig.models?.primary?.model) {
+    const r = await runCmd(OPENCLAW_NODE, clawArgs(["models", "set", mainConfig.models.primary.model]));
+    extra += `[models] primary=${mainConfig.models.primary.model} exit=${r.code}\n`;
+  }
+
+  // Apply fallback models
+  if (Array.isArray(mainConfig.models?.fallback)) {
+    const fallbackConfig = mainConfig.models.fallback.map((f) => ({
+      model: f.model,
+      label: f.label,
+    }));
+    const r = await runCmd(
+      OPENCLAW_NODE,
+      clawArgs(["config", "set", "--json", "models.fallback", JSON.stringify(fallbackConfig)]),
+    );
+    extra += `[models] fallback (${fallbackConfig.length} models) exit=${r.code}\n`;
+  }
+
+  // Apply routing rules
+  if (mainConfig.models?.routing) {
+    const r = await runCmd(
+      OPENCLAW_NODE,
+      clawArgs(["config", "set", "--json", "models.routing", JSON.stringify(mainConfig.models.routing)]),
+    );
+    extra += `[models] routing rules exit=${r.code}\n`;
+  }
+
+  // Apply cost tracking
+  if (mainConfig.costTracking) {
+    const r = await runCmd(
+      OPENCLAW_NODE,
+      clawArgs(["config", "set", "--json", "costTracking", JSON.stringify(mainConfig.costTracking)]),
+    );
+    extra += `[config] costTracking exit=${r.code}\n`;
+  }
+
+  // Apply agents
+  if (mainConfig.agents) {
+    for (const [agentId, agentCfg] of Object.entries(mainConfig.agents)) {
+      // Validate agent ID
+      if (!/^[A-Za-z0-9_-]+$/.test(agentId)) {
+        extra += `[agents] skipped invalid ID: ${agentId}\n`;
+        continue;
+      }
+      const r = await runCmd(
+        OPENCLAW_NODE,
+        clawArgs(["config", "set", "--json", `agents.${agentId}`, JSON.stringify(agentCfg)]),
+      );
+      extra += `[agents] ${agentId} exit=${r.code}\n`;
+    }
+  }
+
+  // Apply context pruning
+  if (mainConfig.contextPruning) {
+    const r = await runCmd(
+      OPENCLAW_NODE,
+      clawArgs(["config", "set", "--json", "contextPruning", JSON.stringify(mainConfig.contextPruning)]),
+    );
+    extra += `[config] contextPruning exit=${r.code}\n`;
+  }
+
+  // Apply caching
+  if (mainConfig.caching) {
+    const r = await runCmd(
+      OPENCLAW_NODE,
+      clawArgs(["config", "set", "--json", "caching", JSON.stringify(mainConfig.caching)]),
+    );
+    extra += `[config] caching exit=${r.code}\n`;
+  }
+
+  // Apply heartbeat
+  if (mainConfig.heartbeat) {
+    const r = await runCmd(
+      OPENCLAW_NODE,
+      clawArgs(["config", "set", "--json", "heartbeat", JSON.stringify(mainConfig.heartbeat)]),
+    );
+    extra += `[config] heartbeat exit=${r.code}\n`;
+  }
+
+  // Apply concurrency
+  if (mainConfig.concurrency) {
+    const r = await runCmd(
+      OPENCLAW_NODE,
+      clawArgs(["config", "set", "--json", "concurrency", JSON.stringify(mainConfig.concurrency)]),
+    );
+    extra += `[config] concurrency exit=${r.code}\n`;
+  }
+
+  // Apply timeouts
+  if (mainConfig.timeouts) {
+    const r = await runCmd(
+      OPENCLAW_NODE,
+      clawArgs(["config", "set", "--json", "timeouts", JSON.stringify(mainConfig.timeouts)]),
+    );
+    extra += `[config] timeouts exit=${r.code}\n`;
+  }
+
+  // Apply monitoring
+  if (mainConfig.monitoring) {
+    const r = await runCmd(
+      OPENCLAW_NODE,
+      clawArgs(["config", "set", "--json", "monitoring", JSON.stringify(mainConfig.monitoring)]),
+    );
+    extra += `[config] monitoring exit=${r.code}\n`;
+  }
+
+  // Apply integrations
+  if (mainConfig.integrations) {
+    const r = await runCmd(
+      OPENCLAW_NODE,
+      clawArgs(["config", "set", "--json", "integrations", JSON.stringify(mainConfig.integrations)]),
+    );
+    extra += `[config] integrations exit=${r.code}\n`;
+  }
+
+  // Restart gateway to apply everything
+  try {
+    await restartGateway();
+    extra += "[gateway] restarted to apply config/main.json\n";
+  } catch (err) {
+    extra += `[gateway] restart failed: ${err.message}\n`;
+  }
+
+  return res.json({ ok: true, output: redactSecrets(extra) });
+});
+
+// Cost tracking summary endpoint
+app.get("/setup/api/costs", requireSetupAuth, (_req, res) => {
+  const mainConfig = loadMainConfig();
+  return res.json({ ok: true, ...costTracker.getSummary(mainConfig) });
+});
+
+// Full dashboard stats endpoint — per-model breakdown, routing hits, hourly chart
+app.get("/setup/api/dashboard/stats", requireSetupAuth, (_req, res) => {
+  const mainConfig = loadMainConfig();
+  const fullStats = costTracker.getFullStats(mainConfig);
+
+  // Include config-level info for the dashboard
+  const configInfo = mainConfig ? {
+    primaryModel: mainConfig.models?.primary?.model || null,
+    fallbackModels: (mainConfig.models?.fallback || []).map((f) => f.model),
+    routingEnabled: mainConfig.models?.routing?.enabled || false,
+    routingRules: (mainConfig.models?.routing?.rules || []).map((r) => ({
+      name: r.name,
+      description: r.description,
+      model: r.model,
+    })),
+    agents: Object.entries(mainConfig.agents || {}).map(([id, a]) => ({
+      id,
+      name: a.name,
+      role: a.role,
+      model: a.model,
+    })),
+    costRates: mainConfig.costTracking?.models || {},
+    dailyBudgetUsd: mainConfig.costTracking?.dailyBudgetUsd || 50,
+    alertThreshold: mainConfig.costTracking?.alertThreshold || 0.8,
+    concurrency: mainConfig.concurrency || {},
+    contextPruning: mainConfig.contextPruning || {},
+    caching: mainConfig.caching || {},
+    heartbeat: mainConfig.heartbeat || {},
+  } : null;
+
+  // Gateway status
+  const gateway = {
+    configured: isConfigured(),
+    running: isGatewayReady(),
+    starting: isGatewayStarting(),
+    lastError: lastGatewayError,
+    lastExit: lastGatewayExit,
+  };
+
+  return res.json({ ok: true, ...fullStats, config: configInfo, gateway });
+});
+
+// Dashboard page
+app.get("/dashboard", requireSetupAuth, (_req, res) => {
+  res.sendFile(path.join(process.cwd(), "src", "public", "dashboard.html"));
+});
+
+// Model routing preview — test which model would be selected for given task hints
+app.post("/setup/api/models/route", requireSetupAuth, (req, res) => {
+  const mainConfig = loadMainConfig();
+  if (!mainConfig) {
+    return res.status(404).json({ ok: false, error: "config/main.json not found" });
+  }
+  const { inputTokens, complexity, hasAttachment, attachmentType } = req.body || {};
+  const selected = selectModelForTask(mainConfig, { inputTokens, complexity, hasAttachment, attachmentType });
+  const primary = mainConfig.models?.primary?.model || "unknown";
+  return res.json({
+    ok: true,
+    selectedModel: selected || primary,
+    matchedRule: selected ? "routing-rule" : "primary-default",
+    primary,
+  });
+});
+
 app.get("/setup/api/models", requireSetupAuth, async (_req, res) => {
   if (!isConfigured()) {
     return res.json({ ok: false, error: "Not configured yet. Run setup first." });
