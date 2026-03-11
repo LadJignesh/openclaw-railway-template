@@ -142,7 +142,7 @@
         </div>
       </div>
 
-      <!-- Row 4: Agents + Config Overview -->
+      <!-- Row 4: Agents + Agent Swarms -->
       <div class="grid grid-cols-1 lg:grid-cols-2 gap-4">
         <!-- Agents -->
         <div class="bg-neutral-900 border border-neutral-800 rounded-xl p-5">
@@ -151,6 +151,23 @@
             <p class="text-neutral-600 text-sm">No agents configured</p>
           </div>
         </div>
+        <!-- Agent Swarms -->
+        <div class="bg-neutral-900 border border-neutral-800 rounded-xl p-5">
+          <div class="flex items-center justify-between mb-4">
+            <h2 class="text-sm font-semibold text-neutral-300 flex items-center gap-2">
+              <svg class="w-4 h-4 text-orange-400" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M17 20h5v-2a3 3 0 00-5.356-1.857M17 20H7m10 0v-2c0-.656-.126-1.283-.356-1.857M7 20H2v-2a3 3 0 015.356-1.857M7 20v-2c0-.656.126-1.283.356-1.857m0 0a5.002 5.002 0 019.288 0M15 7a3 3 0 11-6 0 3 3 0 016 0zm6 3a2 2 0 11-4 0 2 2 0 014 0zM7 10a2 2 0 11-4 0 2 2 0 014 0z"/></svg>
+              Agent Swarms
+            </h2>
+            <span id="swarm-stats-badge" class="text-xs font-medium px-2 py-0.5 rounded-full bg-neutral-800 text-neutral-500">0 total</span>
+          </div>
+          <div id="swarm-section" class="space-y-3">
+            <p class="text-neutral-600 text-sm">No swarms spawned yet — launch from Setup page</p>
+          </div>
+        </div>
+      </div>
+
+      <!-- Row 5: Config Overview -->
+      <div class="grid grid-cols-1 gap-4">
         <!-- Config Overview -->
         <div class="bg-neutral-900 border border-neutral-800 rounded-xl p-5">
           <h2 class="text-sm font-semibold text-neutral-300 mb-4">System Configuration</h2>
@@ -293,6 +310,9 @@
       // Agents
       renderAgents(data.config?.agents || []);
 
+      // Swarms
+      renderSwarms(data.swarmStats, data.activeSwarms || [], data.swarmTemplates || []);
+
       // Config overview
       renderConfigOverview(data.config);
 
@@ -409,6 +429,86 @@
           </div>
         </div>`;
       }).join('');
+    }
+
+    const STRATEGY_ICONS = { pipeline: '→', parallel: '⇉', sequential: '↓', debate: '⇄' };
+    const STRATEGY_COLORS = {
+      pipeline: { bg: 'bg-purple-500/20', text: 'text-purple-400' },
+      parallel: { bg: 'bg-blue-500/20', text: 'text-blue-400' },
+      debate:   { bg: 'bg-amber-500/20', text: 'text-amber-400' },
+    };
+    const STATUS_COLORS = {
+      running: 'text-blue-400', completed: 'text-emerald-400', failed: 'text-red-400',
+      cancelled: 'text-neutral-500', pending: 'text-yellow-400',
+    };
+
+    function renderSwarms(stats, activeSwarms, templates) {
+      const container = document.getElementById('swarm-section');
+      const badge = document.getElementById('swarm-stats-badge');
+
+      if (stats) {
+        const parts = [];
+        if (stats.active > 0) parts.push(`${stats.active} active`);
+        parts.push(`${stats.total} total`);
+        if (stats.totalCostUsd > 0) parts.push(`$${fmtUsd(stats.totalCostUsd)}`);
+        badge.textContent = parts.join(' · ');
+        if (stats.active > 0) {
+          badge.className = 'text-xs font-medium px-2 py-0.5 rounded-full bg-blue-900/30 text-blue-400';
+        }
+      }
+
+      let html = '';
+
+      // Active swarms
+      if (activeSwarms.length > 0) {
+        for (const s of activeSwarms) {
+          const pct = s.stepsTotal > 0 ? Math.round(s.stepsCompleted / s.stepsTotal * 100) : 0;
+          const sc = STRATEGY_COLORS[s.strategy] || STRATEGY_COLORS.pipeline;
+          html += `<div class="bg-blue-900/10 border border-blue-800/50 rounded-lg p-3">
+            <div class="flex items-center justify-between mb-1.5">
+              <div class="flex items-center gap-2">
+                <span class="text-sm ${sc.text} ${sc.bg} px-1.5 py-0.5 rounded text-xs font-medium">${escHtml(STRATEGY_ICONS[s.strategy] || '?')} ${escHtml(s.strategy)}</span>
+                <span class="text-sm font-medium text-neutral-200">${escHtml(s.templateName)}</span>
+              </div>
+              <span class="text-xs text-blue-400 font-medium">${s.stepsCompleted}/${s.stepsTotal} steps</span>
+            </div>
+            <p class="text-xs text-neutral-500 mb-2 truncate">${escHtml(s.task)}</p>
+            <div class="h-1.5 bg-neutral-800 rounded-full overflow-hidden">
+              <div class="h-full bg-blue-500 rounded-full bar-animate" style="width: ${pct}%"></div>
+            </div>
+            <div class="flex items-center justify-between mt-1.5 text-[10px] text-neutral-600">
+              <span>$${fmtUsd(s.totalCostUsd || 0)}</span>
+              <span>${pct}%</span>
+            </div>
+          </div>`;
+        }
+      }
+
+      // Templates list (if no active swarms)
+      if (activeSwarms.length === 0 && templates.length > 0) {
+        html += '<div class="space-y-2">';
+        for (const t of templates.slice(0, 5)) {
+          const sc = STRATEGY_COLORS[t.strategy] || STRATEGY_COLORS.pipeline;
+          html += `<div class="flex items-center justify-between bg-neutral-800/50 rounded-lg px-3 py-2">
+            <div class="flex items-center gap-2 min-w-0">
+              <span class="${sc.text} ${sc.bg} px-1.5 py-0.5 rounded text-[10px] font-medium flex-shrink-0">${escHtml(STRATEGY_ICONS[t.strategy] || '?')}</span>
+              <div class="min-w-0">
+                <p class="text-sm text-neutral-300 truncate">${escHtml(t.name)}</p>
+                <p class="text-[10px] text-neutral-600 truncate">${escHtml(t.description)}</p>
+              </div>
+            </div>
+            <span class="text-[10px] text-neutral-600 flex-shrink-0 ml-2">${t.stepCount} steps</span>
+          </div>`;
+        }
+        html += '</div>';
+        html += '<p class="text-[10px] text-neutral-600 mt-2">Launch swarms from the <a href="/setup" class="text-purple-500 hover:text-purple-400">Setup page</a></p>';
+      }
+
+      if (!html) {
+        html = '<p class="text-neutral-600 text-sm">No swarms spawned yet — launch from <a href="/setup" class="text-purple-500 hover:text-purple-400">Setup page</a></p>';
+      }
+
+      container.innerHTML = html;
     }
 
     function renderConfigOverview(config) {

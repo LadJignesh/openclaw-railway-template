@@ -1508,6 +1508,430 @@ const costTracker = {
 // ========== CONFIG APPLY ENDPOINT ==========
 // Reads config/main.json and pushes all settings to openclaw via CLI.
 
+// ========== AGENT SWARM ORCHESTRATOR ==========
+// Manages coordinated groups of agents working together on complex tasks.
+// Strategies: pipeline (sequential handoff), parallel (concurrent execution)
+
+const swarmOrchestrator = {
+  swarms: new Map(),    // id → swarm state
+  nextId: 1,
+  maxHistory: 50,       // keep last N completed swarms
+
+  _generateId() {
+    return `swarm-${Date.now()}-${this.nextId++}`;
+  },
+
+  getTemplate(mainConfig, templateId) {
+    return mainConfig?.swarms?.templates?.[templateId] || null;
+  },
+
+  getTemplates(mainConfig) {
+    return mainConfig?.swarms?.templates || {};
+  },
+
+  create(templateId, task, mainConfig) {
+    const swarmConfig = mainConfig?.swarms || {};
+    if (!swarmConfig.enabled) {
+      return { error: "Swarms are disabled in config" };
+    }
+
+    const activeCount = [...this.swarms.values()].filter(s => s.status === "running").length;
+    const maxConcurrent = swarmConfig.maxConcurrentSwarms || 3;
+    if (activeCount >= maxConcurrent) {
+      return { error: `Max concurrent swarms reached (${maxConcurrent}). Cancel or wait for active swarms to finish.` };
+    }
+
+    const template = this.getTemplate(mainConfig, templateId);
+    if (!template) {
+      return { error: `Unknown swarm template: ${templateId}` };
+    }
+
+    // Validate all agents in template exist in config
+    const configuredAgents = mainConfig.agents || {};
+    for (const step of template.steps) {
+      if (!configuredAgents[step.agent]) {
+        return { error: `Agent "${step.agent}" in template "${templateId}" is not configured` };
+      }
+    }
+
+    const id = this._generateId();
+    const timeoutMinutes = swarmConfig.defaultTimeoutMinutes || 30;
+
+    const swarm = {
+      id,
+      templateId,
+      templateName: template.name,
+      strategy: template.strategy,
+      task,
+      status: "running",
+      createdAt: new Date().toISOString(),
+      completedAt: null,
+      steps: template.steps.map((step, i) => ({
+        index: i,
+        agent: step.agent,
+        agentName: configuredAgents[step.agent]?.name || step.agent,
+        model: configuredAgents[step.agent]?.model || "unknown",
+        instruction: step.instruction,
+        status: "pending",      // pending | running | completed | failed | cancelled
+        startedAt: null,
+        completedAt: null,
+        output: null,
+        error: null,
+        costUsd: 0,
+      })),
+      totalCostUsd: 0,
+      result: null,
+      error: null,
+      timeoutAt: new Date(Date.now() + timeoutMinutes * 60_000).toISOString(),
+    };
+
+    this.swarms.set(id, swarm);
+    this._pruneHistory();
+
+    // Start execution asynchronously
+    this._execute(id, mainConfig).catch(err => {
+      console.error(`[swarm] ${id} execution error:`, err.message);
+      const s = this.swarms.get(id);
+      if (s && s.status === "running") {
+        s.status = "failed";
+        s.error = err.message;
+        s.completedAt = new Date().toISOString();
+      }
+    });
+
+    return { ok: true, swarmId: id, swarm };
+  },
+
+  async _execute(swarmId, mainConfig) {
+    const swarm = this.swarms.get(swarmId);
+    if (!swarm) return;
+
+    const strategy = swarm.strategy;
+    console.log(`[swarm] ${swarmId} starting (${strategy}, ${swarm.steps.length} steps)`);
+
+    try {
+      if (strategy === "parallel") {
+        await this._executeParallel(swarm, mainConfig);
+      } else {
+        // pipeline / sequential
+        await this._executePipeline(swarm, mainConfig);
+      }
+
+      if (swarm.status === "running") {
+        swarm.status = "completed";
+        swarm.completedAt = new Date().toISOString();
+        // Aggregate results
+        swarm.result = swarm.steps
+          .filter(s => s.status === "completed" && s.output)
+          .map(s => `## ${s.agentName} (${s.agent})\n${s.output}`)
+          .join("\n\n---\n\n");
+        console.log(`[swarm] ${swarmId} completed — cost $${swarm.totalCostUsd.toFixed(4)}`);
+      }
+    } catch (err) {
+      if (swarm.status === "running") {
+        swarm.status = "failed";
+        swarm.error = err.message;
+        swarm.completedAt = new Date().toISOString();
+      }
+      throw err;
+    }
+  },
+
+  async _executePipeline(swarm, mainConfig) {
+    let previousOutput = `Task: ${swarm.task}`;
+
+    for (const step of swarm.steps) {
+      if (swarm.status !== "running") break;
+
+      step.status = "running";
+      step.startedAt = new Date().toISOString();
+
+      try {
+        const prompt = `${step.instruction}\n\nContext:\n${previousOutput}`;
+        const result = await this._dispatchToAgent(step.agent, prompt, mainConfig);
+
+        step.output = result.output;
+        step.costUsd = result.costUsd || 0;
+        swarm.totalCostUsd += step.costUsd;
+        step.status = "completed";
+        step.completedAt = new Date().toISOString();
+        previousOutput = result.output;
+      } catch (err) {
+        step.status = "failed";
+        step.error = err.message;
+        step.completedAt = new Date().toISOString();
+        throw err;
+      }
+    }
+  },
+
+  async _executeParallel(swarm, mainConfig) {
+    const ctx = `Task: ${swarm.task}`;
+
+    const promises = swarm.steps.map(async (step) => {
+      if (swarm.status !== "running") return;
+
+      step.status = "running";
+      step.startedAt = new Date().toISOString();
+
+      try {
+        const prompt = `${step.instruction}\n\nContext:\n${ctx}`;
+        const result = await this._dispatchToAgent(step.agent, prompt, mainConfig);
+
+        step.output = result.output;
+        step.costUsd = result.costUsd || 0;
+        swarm.totalCostUsd += step.costUsd;
+        step.status = "completed";
+        step.completedAt = new Date().toISOString();
+      } catch (err) {
+        step.status = "failed";
+        step.error = err.message;
+        step.completedAt = new Date().toISOString();
+      }
+    });
+
+    await Promise.allSettled(promises);
+
+    // If any step failed and none completed, the swarm failed
+    const hasCompleted = swarm.steps.some(s => s.status === "completed");
+    if (!hasCompleted) {
+      const firstError = swarm.steps.find(s => s.error)?.error || "All steps failed";
+      throw new Error(firstError);
+    }
+  },
+
+  async _dispatchToAgent(agentId, prompt, mainConfig) {
+    // Dispatch via the internal gateway API
+    // The gateway handles actual AI model calls
+    const agentConfig = mainConfig?.agents?.[agentId];
+    const model = agentConfig?.model || mainConfig?.models?.primary?.model;
+
+    try {
+      const controller = new AbortController();
+      const timeout = setTimeout(() => controller.abort(), 120_000);
+
+      const response = await fetch(`${GATEWAY_TARGET}/v1/chat/completions`, {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          "Authorization": `Bearer ${OPENCLAW_GATEWAY_TOKEN}`,
+        },
+        body: JSON.stringify({
+          model: model || "default",
+          messages: [
+            ...(agentConfig?.systemPrompt ? [{ role: "system", content: agentConfig.systemPrompt }] : []),
+            { role: "user", content: prompt },
+          ],
+          max_tokens: 4096,
+        }),
+        signal: controller.signal,
+      });
+
+      clearTimeout(timeout);
+
+      if (!response.ok) {
+        const body = await response.text();
+        throw new Error(`Gateway returned ${response.status}: ${body.slice(0, 200)}`);
+      }
+
+      const data = await response.json();
+      const output = data?.choices?.[0]?.message?.content || "(no response)";
+      const usage = data?.usage || {};
+      const inputTokens = usage.prompt_tokens || 0;
+      const outputTokens = usage.completion_tokens || 0;
+
+      // Record in cost tracker
+      if (model && (inputTokens || outputTokens)) {
+        costTracker.record(model, inputTokens, outputTokens, mainConfig);
+      }
+
+      const rates = mainConfig?.costTracking?.models?.[model];
+      let costUsd = 0;
+      if (rates) {
+        costUsd = (inputTokens / 1_000_000) * (rates.inputPer1M || 0) +
+                  (outputTokens / 1_000_000) * (rates.outputPer1M || 0);
+      }
+
+      return { output, costUsd, inputTokens, outputTokens };
+    } catch (err) {
+      if (err.name === "AbortError") {
+        throw new Error(`Agent ${agentId} timed out after 120s`);
+      }
+      throw err;
+    }
+  },
+
+  cancel(swarmId) {
+    const swarm = this.swarms.get(swarmId);
+    if (!swarm) return { error: "Swarm not found" };
+    if (swarm.status !== "running") return { error: `Swarm is ${swarm.status}, not running` };
+
+    swarm.status = "cancelled";
+    swarm.completedAt = new Date().toISOString();
+    for (const step of swarm.steps) {
+      if (step.status === "pending" || step.status === "running") {
+        step.status = "cancelled";
+        step.completedAt = new Date().toISOString();
+      }
+    }
+    console.log(`[swarm] ${swarmId} cancelled`);
+    return { ok: true };
+  },
+
+  getAll() {
+    return [...this.swarms.values()]
+      .sort((a, b) => new Date(b.createdAt) - new Date(a.createdAt));
+  },
+
+  getActive() {
+    return this.getAll().filter(s => s.status === "running");
+  },
+
+  get(swarmId) {
+    return this.swarms.get(swarmId) || null;
+  },
+
+  getStats() {
+    const all = this.getAll();
+    const active = all.filter(s => s.status === "running");
+    const completed = all.filter(s => s.status === "completed");
+    const failed = all.filter(s => s.status === "failed");
+    const cancelled = all.filter(s => s.status === "cancelled");
+    const totalCost = all.reduce((sum, s) => sum + (s.totalCostUsd || 0), 0);
+
+    return {
+      total: all.length,
+      active: active.length,
+      completed: completed.length,
+      failed: failed.length,
+      cancelled: cancelled.length,
+      totalCostUsd: Math.round(totalCost * 10000) / 10000,
+    };
+  },
+
+  _pruneHistory() {
+    const all = this.getAll();
+    const terminal = all.filter(s => s.status !== "running");
+    if (terminal.length > this.maxHistory) {
+      const toRemove = terminal.slice(this.maxHistory);
+      for (const s of toRemove) {
+        this.swarms.delete(s.id);
+      }
+    }
+  },
+};
+
+// ========== SWARM API ENDPOINTS ==========
+
+// List available swarm templates
+app.get("/setup/api/swarms/templates", requireSetupAuth, (_req, res) => {
+  const mainConfig = loadMainConfig();
+  const templates = swarmOrchestrator.getTemplates(mainConfig);
+  const result = Object.entries(templates).map(([id, t]) => ({
+    id,
+    name: t.name,
+    description: t.description,
+    strategy: t.strategy,
+    agents: t.agents,
+    stepCount: t.steps?.length || 0,
+  }));
+  return res.json({ ok: true, templates: result });
+});
+
+// Swarm stats (for dashboard) — must come before :id route
+app.get("/setup/api/swarms/stats", requireSetupAuth, (_req, res) => {
+  const stats = swarmOrchestrator.getStats();
+  const active = swarmOrchestrator.getActive().map(s => ({
+    id: s.id,
+    templateName: s.templateName,
+    strategy: s.strategy,
+    task: s.task.length > 80 ? s.task.slice(0, 80) + "..." : s.task,
+    stepsTotal: s.steps.length,
+    stepsCompleted: s.steps.filter(st => st.status === "completed").length,
+    stepsRunning: s.steps.filter(st => st.status === "running").length,
+    totalCostUsd: Math.round((s.totalCostUsd || 0) * 10000) / 10000,
+    createdAt: s.createdAt,
+  }));
+  return res.json({ ok: true, stats, activeSwarms: active });
+});
+
+// List all swarms (active + history)
+app.get("/setup/api/swarms", requireSetupAuth, (_req, res) => {
+  const swarms = swarmOrchestrator.getAll().map(s => ({
+    id: s.id,
+    templateId: s.templateId,
+    templateName: s.templateName,
+    strategy: s.strategy,
+    task: s.task.length > 100 ? s.task.slice(0, 100) + "..." : s.task,
+    status: s.status,
+    createdAt: s.createdAt,
+    completedAt: s.completedAt,
+    totalCostUsd: Math.round((s.totalCostUsd || 0) * 10000) / 10000,
+    stepsTotal: s.steps.length,
+    stepsCompleted: s.steps.filter(st => st.status === "completed").length,
+    error: s.error,
+  }));
+  const stats = swarmOrchestrator.getStats();
+  return res.json({ ok: true, swarms, stats });
+});
+
+// Get single swarm detail
+app.get("/setup/api/swarms/:id", requireSetupAuth, (req, res) => {
+  const swarm = swarmOrchestrator.get(req.params.id);
+  if (!swarm) return res.status(404).json({ ok: false, error: "Swarm not found" });
+  return res.json({ ok: true, swarm });
+});
+
+// Spawn a new swarm
+app.post("/setup/api/swarms/spawn", requireSetupAuth, (req, res) => {
+  const { templateId, task } = req.body || {};
+
+  if (!templateId || typeof templateId !== "string") {
+    return res.status(400).json({ ok: false, error: "templateId is required" });
+  }
+  if (!/^[A-Za-z0-9_-]+$/.test(templateId)) {
+    return res.status(400).json({ ok: false, error: "Invalid templateId format" });
+  }
+  if (!task || typeof task !== "string" || task.trim().length < 3) {
+    return res.status(400).json({ ok: false, error: "task is required (min 3 characters)" });
+  }
+  if (task.length > 5000) {
+    return res.status(400).json({ ok: false, error: "task too long (max 5000 characters)" });
+  }
+
+  if (!isGatewayReady()) {
+    return res.status(503).json({ ok: false, error: "Gateway not ready. Start the gateway first." });
+  }
+
+  const mainConfig = loadMainConfig();
+  if (!mainConfig) {
+    return res.status(500).json({ ok: false, error: "config/main.json not found" });
+  }
+
+  const result = swarmOrchestrator.create(templateId, task.trim(), mainConfig);
+  if (result.error) {
+    return res.status(400).json({ ok: false, error: result.error });
+  }
+
+  return res.json({
+    ok: true,
+    swarmId: result.swarmId,
+    templateName: result.swarm.templateName,
+    strategy: result.swarm.strategy,
+    steps: result.swarm.steps.length,
+    status: result.swarm.status,
+  });
+});
+
+// Cancel a running swarm
+app.post("/setup/api/swarms/:id/cancel", requireSetupAuth, (req, res) => {
+  const result = swarmOrchestrator.cancel(req.params.id);
+  if (result.error) {
+    return res.status(400).json({ ok: false, error: result.error });
+  }
+  return res.json({ ok: true, message: "Swarm cancelled" });
+});
+
 app.post("/setup/api/config/apply", requireSetupAuth, async (req, res) => {
   if (!isConfigured()) {
     return res.status(400).json({ ok: false, error: "Not configured yet. Run setup first." });
@@ -1636,6 +2060,20 @@ app.post("/setup/api/config/apply", requireSetupAuth, async (req, res) => {
     extra += `[config] integrations exit=${r.code}\n`;
   }
 
+  // Apply swarm concurrency settings
+  if (mainConfig.swarms) {
+    const swarmMeta = {
+      enabled: mainConfig.swarms.enabled,
+      maxConcurrentSwarms: mainConfig.swarms.maxConcurrentSwarms,
+      defaultTimeoutMinutes: mainConfig.swarms.defaultTimeoutMinutes,
+    };
+    const r = await runCmd(
+      OPENCLAW_NODE,
+      clawArgs(["config", "set", "--json", "swarms", JSON.stringify(swarmMeta)]),
+    );
+    extra += `[config] swarms (${Object.keys(mainConfig.swarms.templates || {}).length} templates) exit=${r.code}\n`;
+  }
+
   // Restart gateway to apply everything
   try {
     await restartGateway();
@@ -1692,7 +2130,39 @@ app.get("/setup/api/dashboard/stats", requireSetupAuth, (_req, res) => {
     lastExit: lastGatewayExit,
   };
 
-  return res.json({ ok: true, ...fullStats, config: configInfo, gateway });
+  // Swarm data
+  const swarmStats = swarmOrchestrator.getStats();
+  const activeSwarms = swarmOrchestrator.getActive().map(s => ({
+    id: s.id,
+    templateName: s.templateName,
+    strategy: s.strategy,
+    task: s.task.length > 80 ? s.task.slice(0, 80) + "..." : s.task,
+    stepsTotal: s.steps.length,
+    stepsCompleted: s.steps.filter(st => st.status === "completed").length,
+    stepsRunning: s.steps.filter(st => st.status === "running").length,
+    totalCostUsd: Math.round((s.totalCostUsd || 0) * 10000) / 10000,
+    createdAt: s.createdAt,
+  }));
+
+  // Swarm templates
+  const swarmTemplates = Object.entries(mainConfig?.swarms?.templates || {}).map(([id, t]) => ({
+    id,
+    name: t.name,
+    description: t.description,
+    strategy: t.strategy,
+    agents: t.agents,
+    stepCount: t.steps?.length || 0,
+  }));
+
+  return res.json({
+    ok: true,
+    ...fullStats,
+    config: configInfo,
+    gateway,
+    swarmStats,
+    activeSwarms,
+    swarmTemplates,
+  });
 });
 
 // Dashboard page

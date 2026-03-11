@@ -134,6 +134,65 @@
     }
   },
 
+  "swarms": {
+    "enabled": true,
+    "maxConcurrentSwarms": 3,
+    "defaultTimeoutMinutes": 30,
+    "templates": {
+      "research-and-write": {
+        "name": "Research & Write",
+        "description": "Researcher gathers data, Writer creates content from findings",
+        "strategy": "pipeline",
+        "agents": ["researcher", "writer"],
+        "steps": [
+          { "agent": "researcher", "instruction": "Research the topic thoroughly and provide structured findings with sources" },
+          { "agent": "writer", "instruction": "Create polished content based on the research findings provided" }
+        ]
+      },
+      "full-stack-sprint": {
+        "name": "Full-Stack Sprint",
+        "description": "Multiple code agents work in parallel on different parts of a feature",
+        "strategy": "parallel",
+        "agents": ["code", "code"],
+        "steps": [
+          { "agent": "code", "instruction": "Implement the backend/API portion of the task" },
+          { "agent": "code", "instruction": "Implement the frontend/UI portion of the task" }
+        ]
+      },
+      "strategic-review": {
+        "name": "Strategic Review",
+        "description": "Researcher analyzes market, Founder makes strategic decisions",
+        "strategy": "pipeline",
+        "agents": ["researcher", "founder"],
+        "steps": [
+          { "agent": "researcher", "instruction": "Conduct comprehensive market and competitive analysis" },
+          { "agent": "founder", "instruction": "Review the research and make strategic recommendations with action items" }
+        ]
+      },
+      "content-pipeline": {
+        "name": "Content Pipeline",
+        "description": "Full content creation: research → write → strategic review",
+        "strategy": "pipeline",
+        "agents": ["researcher", "writer", "founder"],
+        "steps": [
+          { "agent": "researcher", "instruction": "Research the topic and provide key facts, trends, and data points" },
+          { "agent": "writer", "instruction": "Create compelling content using the research findings" },
+          { "agent": "founder", "instruction": "Review content for strategic alignment, suggest edits, and approve for publishing" }
+        ]
+      },
+      "debate": {
+        "name": "Debate & Synthesize",
+        "description": "Two agents analyze from different perspectives, then results are merged",
+        "strategy": "parallel",
+        "agents": ["researcher", "founder"],
+        "steps": [
+          { "agent": "researcher", "instruction": "Analyze from a data-driven, evidence-based perspective" },
+          { "agent": "founder", "instruction": "Analyze from a strategic, business-impact perspective" }
+        ]
+      }
+    }
+  },
+
   "contextPruning": {
     "mode": "cache-ttl",
     "ttl": "1h",
