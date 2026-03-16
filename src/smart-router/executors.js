@@ -1,20 +1,80 @@
-// Model Executors — FreeModelExecutor (OpenRouter) and PaidModelExecutor (Anthropic/OpenAI)
+// Model Executors — FreeModelExecutor (OpenRouter + direct NVIDIA API)
+// and PaidModelExecutor (Anthropic/OpenAI)
 
 import config from "./config.js";
 
 /**
- * Execute a chat completion against OpenRouter (free Nvidia models).
+ * Execute a chat completion against OpenRouter or direct NVIDIA API.
  */
 export class FreeModelExecutor {
   /**
-   * @param {object} model - model config from config.freeModels
+   * @param {object} model - model config from config.freeModels or config.nvidiaDirectModels
    * @param {Array} messages - [{ role, content }]
-   * @param {object} [opts] - { temperature, maxTokens, timeoutMs }
+   * @param {object} [opts] - { temperature, maxTokens, timeoutMs, useNvidiaDirect }
    * @returns {Promise<{ text, inputTokens, outputTokens, latencyMs }>}
    */
   async execute(model, messages, opts = {}) {
+    // If NVIDIA_API_KEY is set and this is a nvidia direct model, use NVIDIA API
+    if (opts.useNvidiaDirect || config.nvidiaApiKey) {
+      return this._executeNvidiaDirect(model, messages, opts);
+    }
+    return this._executeOpenRouter(model, messages, opts);
+  }
+
+  async _executeNvidiaDirect(model, messages, opts) {
+    const apiKey = config.nvidiaApiKey;
+    if (!apiKey) throw new Error("NVIDIA_API_KEY not set");
+
+    const temperature = opts.temperature ?? 0.7;
+    const maxTokens = opts.maxTokens ?? 1024;
+    const timeoutMs = opts.timeoutMs ?? config.routing.requestTimeoutMs;
+
+    const body = {
+      model: model.id,
+      messages,
+      temperature,
+      max_tokens: maxTokens,
+    };
+
+    const start = Date.now();
+    const controller = new AbortController();
+    const timer = setTimeout(() => controller.abort(), timeoutMs);
+
+    try {
+      const res = await fetch(config.nvidiaBaseUrl, {
+        method: "POST",
+        headers: {
+          Authorization: `Bearer ${apiKey}`,
+          "Content-Type": "application/json",
+        },
+        body: JSON.stringify(body),
+        signal: controller.signal,
+      });
+
+      if (!res.ok) {
+        const errText = await res.text().catch(() => "");
+        throw new Error(`NVIDIA API ${res.status}: ${errText.slice(0, 200)}`);
+      }
+
+      const data = await res.json();
+      const latencyMs = Date.now() - start;
+      const choice = data.choices?.[0];
+
+      return {
+        text: choice?.message?.content || "",
+        inputTokens: data.usage?.prompt_tokens || 0,
+        outputTokens: data.usage?.completion_tokens || 0,
+        latencyMs,
+        model: model.id,
+      };
+    } finally {
+      clearTimeout(timer);
+    }
+  }
+
+  async _executeOpenRouter(model, messages, opts) {
     const apiKey = config.openrouterApiKey;
-    if (!apiKey) throw new Error("OPENROUTER_API_KEY not set");
+    if (!apiKey) throw new Error("OPENROUTER_API_KEY not set — set NVIDIA_API_KEY or OPENROUTER_API_KEY");
 
     const temperature = opts.temperature ?? 0.7;
     const maxTokens = opts.maxTokens ?? 1024;

@@ -3,14 +3,17 @@
 
 const config = {
   // API Keys (from environment)
-  openrouterApiKey: process.env.OPENROUTER_API_KEY || "",
-  anthropicApiKey: process.env.ANTHROPIC_API_KEY || "",
-  openaiApiKey: process.env.OPENAI_API_KEY || "",
+  get openrouterApiKey() { return process.env.OPENROUTER_API_KEY || ""; },
+  get anthropicApiKey() { return process.env.ANTHROPIC_API_KEY || ""; },
+  get openaiApiKey() { return process.env.OPENAI_API_KEY || ""; },
+  get nvidiaApiKey() { return process.env.NVIDIA_API_KEY || ""; },
 
-  // OpenRouter endpoint for free Nvidia models
+  // Endpoints
   openrouterBaseUrl: "https://openrouter.ai/api/v1/chat/completions",
+  nvidiaBaseUrl: "https://integrate.api.nvidia.com/v1/chat/completions",
 
-  // Free Nvidia models (via OpenRouter)
+  // Free/low-cost Nvidia models — uses direct NVIDIA API if NVIDIA_API_KEY is set,
+  // otherwise falls back to OpenRouter free tier.
   freeModels: {
     "nemotron-nano-9b": {
       id: "nvidia/nemotron-nano-9b-v2:free",
@@ -46,6 +49,51 @@ const config = {
       complexity: "medium_high",
       capabilities: ["text"],
       speedRange: "5-15s",
+      costPerMillionTokens: 0,
+    },
+  },
+
+  // Direct NVIDIA API models (requires NVIDIA_API_KEY)
+  // These use integrate.api.nvidia.com — not free but very cheap.
+  nvidiaDirectModels: {
+    "nvidia-nemotron-70b": {
+      id: "nvidia/llama-3.1-nemotron-70b-instruct",
+      name: "Nemotron 70B Instruct",
+      maxInputTokens: 32000,
+      complexity: "medium_high",
+      capabilities: ["text", "reasoning"],
+      costPerMillionTokens: 0,  // free tier on NVIDIA API
+    },
+    "nvidia-nemotron-super-49b": {
+      id: "nvidia/llama-3.3-nemotron-super-49b-v1",
+      name: "Nemotron Super 49B",
+      maxInputTokens: 32000,
+      complexity: "medium",
+      capabilities: ["text"],
+      costPerMillionTokens: 0,
+    },
+    "nvidia-nemotron-ultra-253b": {
+      id: "nvidia/llama-3.1-nemotron-ultra-253b-v1",
+      name: "Nemotron Ultra 253B",
+      maxInputTokens: 32000,
+      complexity: "high",
+      capabilities: ["text", "reasoning"],
+      costPerMillionTokens: 0,
+    },
+    "nvidia-llama-405b": {
+      id: "meta/llama-3.1-405b-instruct",
+      name: "Llama 3.1 405B",
+      maxInputTokens: 128000,
+      complexity: "high",
+      capabilities: ["text", "reasoning"],
+      costPerMillionTokens: 0,
+    },
+    "nvidia-deepseek-r1": {
+      id: "deepseek-ai/deepseek-r1",
+      name: "DeepSeek R1",
+      maxInputTokens: 64000,
+      complexity: "high",
+      capabilities: ["text", "reasoning"],
       costPerMillionTokens: 0,
     },
   },

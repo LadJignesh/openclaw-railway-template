@@ -10,6 +10,11 @@ function getRouter() {
   return router;
 }
 
+/** Expose the smart router instance for use by the dashboard stats endpoint. */
+export function getSmartRouterInstance() {
+  return getRouter();
+}
+
 /**
  * Register smart-router API endpoints on an Express app.
  * All routes require the same basic auth as /setup.

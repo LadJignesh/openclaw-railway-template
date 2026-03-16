@@ -50,6 +50,33 @@ export function detectChannels() {
 }
 
 /**
+ * Detect NVIDIA API key for direct model access.
+ * @returns {{ apiKey: string, models: string[] } | null}
+ */
+export function detectNvidia() {
+  const key = process.env.NVIDIA_API_KEY?.trim();
+  if (!key) return null;
+
+  // Default Nvidia models available via integrate.api.nvidia.com
+  const defaultModels = [
+    "nvidia/llama-3.1-nemotron-70b-instruct",
+    "nvidia/llama-3.3-nemotron-super-49b-v1",
+    "nvidia/llama-3.1-nemotron-ultra-253b-v1",
+    "meta/llama-3.1-405b-instruct",
+    "meta/llama-3.3-70b-instruct",
+    "deepseek-ai/deepseek-r1",
+  ];
+
+  // Allow overriding models via env var (comma-separated)
+  const envModels = process.env.NVIDIA_MODELS?.trim();
+  const models = envModels
+    ? envModels.split(",").map((m) => m.trim()).filter(Boolean)
+    : defaultModels;
+
+  return { apiKey: key, models };
+}
+
+/**
  * Build the payload that the existing onboarding flow expects.
  * Returns null if no provider is detected (cannot auto-setup).
  */

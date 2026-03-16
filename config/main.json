@@ -75,7 +75,12 @@
       "anthropic/claude-3-opus-20250219":     { "inputPer1M": 15.00, "outputPer1M": 75.00 },
       "anthropic/claude-3-haiku-20250307":    { "inputPer1M": 0.25, "outputPer1M": 1.25 },
       "openai/gpt-4o":                        { "inputPer1M": 2.50, "outputPer1M": 10.00 },
-      "openai/gpt-4o-mini":                   { "inputPer1M": 0.15, "outputPer1M": 0.60 }
+      "openai/gpt-4o-mini":                   { "inputPer1M": 0.15, "outputPer1M": 0.60 },
+      "nvidia/llama-3.1-nemotron-70b-instruct":     { "inputPer1M": 0.00, "outputPer1M": 0.00 },
+      "nvidia/llama-3.3-nemotron-super-49b-v1":     { "inputPer1M": 0.00, "outputPer1M": 0.00 },
+      "nvidia/llama-3.1-nemotron-ultra-253b-v1":    { "inputPer1M": 0.00, "outputPer1M": 0.00 },
+      "meta/llama-3.1-405b-instruct":               { "inputPer1M": 0.00, "outputPer1M": 0.00 },
+      "deepseek-ai/deepseek-r1":                    { "inputPer1M": 0.00, "outputPer1M": 0.00 }
     }
   },
 

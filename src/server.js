@@ -8,8 +8,8 @@ import express from "express";
 import httpProxy from "http-proxy";
 import pty from "node-pty";
 import { WebSocketServer } from "ws";
-import { registerSmartRouterRoutes } from "./smart-router/routes.js";
-import { buildAutoSetupPayload, detectProvider } from "./auto-setup.js";
+import { registerSmartRouterRoutes, getSmartRouterInstance } from "./smart-router/routes.js";
+import { buildAutoSetupPayload, detectProvider, detectNvidia } from "./auto-setup.js";
 
 const PORT = Number.parseInt(process.env.PORT ?? "8080", 10);
 const STATE_DIR =
@@ -868,6 +868,30 @@ async function runAutoSetup() {
         botToken: payload.slackBotToken || undefined,
         appToken: payload.slackAppToken || undefined,
       });
+    }
+
+    // Configure NVIDIA as a custom provider if NVIDIA_API_KEY is set
+    const nvidia = detectNvidia();
+    if (nvidia) {
+      console.log(`[auto-setup] Configuring NVIDIA provider (${nvidia.models.length} models)...`);
+      const nvidiaConfig = {
+        id: "nvidia",
+        baseUrl: "https://integrate.api.nvidia.com/v1",
+        apiKeyEnvVar: "NVIDIA_API_KEY",
+        models: nvidia.models,
+      };
+      const nr = await runCmd(
+        OPENCLAW_NODE,
+        clawArgs(["config", "set", "--json", "providers.nvidia", JSON.stringify(nvidiaConfig)]),
+      );
+      console.log(`[auto-setup] NVIDIA provider configured (exit=${nr.code})`);
+
+      // If no model was explicitly set, default to a Nvidia model
+      if (!payload.model) {
+        const defaultNvidiaModel = nvidia.models[0];
+        const mr = await runCmd(OPENCLAW_NODE, clawArgs(["models", "set", defaultNvidiaModel]));
+        console.log(`[auto-setup] Default model set to ${defaultNvidiaModel} (exit=${mr.code})`);
+      }
     }
 
     // Start gateway
@@ -2304,6 +2328,102 @@ app.get("/setup/api/dashboard/stats", requireSetupAuth, (_req, res) => {
     stepCount: t.steps?.length || 0,
   }));
 
+  // Smart Router stats — merge into dashboard data
+  let smartRouterData = null;
+  try {
+    const sr = getSmartRouterInstance();
+    const srSummary = sr.getDailySummary();
+    const srModelStats = sr.getModelStats();
+    const srStatus = sr.getStatus();
+    const srEntries = sr.costTracker.getEntries();
+
+    // Build per-model breakdown from smart router logs
+    const srModelBreakdown = {};
+    for (const entry of srEntries) {
+      const key = entry.selected_model || "unknown";
+      if (!srModelBreakdown[key]) {
+        srModelBreakdown[key] = { requests: 0, inputTokens: 0, outputTokens: 0, costUsd: 0, type: entry.model_type };
+      }
+      srModelBreakdown[key].requests += 1;
+      srModelBreakdown[key].inputTokens += entry.input_tokens || 0;
+      srModelBreakdown[key].outputTokens += entry.output_tokens || 0;
+      srModelBreakdown[key].costUsd += entry.total_cost || 0;
+    }
+
+    // Build hourly breakdown from smart router logs
+    const srHourly = {};
+    for (const entry of srEntries) {
+      const hour = entry.timestamp?.slice(11, 13) || "00";
+      if (!srHourly[hour]) srHourly[hour] = { hour, costUsd: 0, requests: 0 };
+      srHourly[hour].costUsd += entry.total_cost || 0;
+      srHourly[hour].requests += 1;
+    }
+
+    smartRouterData = {
+      summary: srSummary,
+      modelHealth: srModelStats,
+      status: srStatus,
+      modelBreakdown: Object.entries(srModelBreakdown).map(([model, s]) => ({
+        model,
+        requests: s.requests,
+        inputTokens: s.inputTokens,
+        outputTokens: s.outputTokens,
+        totalTokens: s.inputTokens + s.outputTokens,
+        costUsd: Math.round(s.costUsd * 10000) / 10000,
+        modelType: s.type,
+      })).sort((a, b) => b.requests - a.requests),
+      hourlySpend: Object.values(srHourly).sort((a, b) => a.hour.localeCompare(b.hour)),
+    };
+
+    // Merge smart-router stats into the main fullStats so the dashboard shows them
+    // Add smart-router model usage into modelBreakdown
+    for (const srModel of smartRouterData.modelBreakdown) {
+      const existing = fullStats.modelBreakdown.find((m) => m.model === srModel.model);
+      if (existing) {
+        existing.requests += srModel.requests;
+        existing.inputTokens += srModel.inputTokens;
+        existing.outputTokens += srModel.outputTokens;
+        existing.totalTokens += srModel.totalTokens;
+        existing.costUsd += srModel.costUsd;
+      } else {
+        fullStats.modelBreakdown.push(srModel);
+      }
+    }
+    fullStats.modelBreakdown.sort((a, b) => b.requests - a.requests);
+
+    // Merge into summary totals
+    fullStats.summary.totalRequests += srSummary.totalTasks || 0;
+    fullStats.summary.dailySpendUsd += srSummary.totalCost || 0;
+    const budget = fullStats.summary.dailyBudgetUsd || 50;
+    fullStats.summary.percentUsed = Math.round((fullStats.summary.dailySpendUsd / budget) * 10000) / 100;
+
+    // Merge hourly spend
+    for (const h of smartRouterData.hourlySpend) {
+      const existing = fullStats.hourlySpend.find((e) => e.hour === h.hour);
+      if (existing) {
+        existing.costUsd += h.costUsd;
+        existing.requests += h.requests;
+      } else {
+        fullStats.hourlySpend.push(h);
+      }
+    }
+    fullStats.hourlySpend.sort((a, b) => a.hour.localeCompare(b.hour));
+
+    // Recalculate token totals
+    const allModels = fullStats.modelBreakdown;
+    fullStats.summary.totalInputTokens = allModels.reduce((s, m) => s + (m.inputTokens || 0), 0);
+    fullStats.summary.totalOutputTokens = allModels.reduce((s, m) => s + (m.outputTokens || 0), 0);
+    fullStats.summary.totalTokens = fullStats.summary.totalInputTokens + fullStats.summary.totalOutputTokens;
+
+    // Recalculate percentOfSpend
+    const totalSpend = fullStats.summary.dailySpendUsd;
+    for (const m of fullStats.modelBreakdown) {
+      m.percentOfSpend = totalSpend > 0 ? Math.round((m.costUsd / totalSpend) * 10000) / 100 : 0;
+    }
+  } catch (err) {
+    console.warn(`[dashboard] smart-router stats unavailable: ${err.message}`);
+  }
+
   return res.json({
     ok: true,
     ...fullStats,
@@ -2312,6 +2432,7 @@ app.get("/setup/api/dashboard/stats", requireSetupAuth, (_req, res) => {
     swarmStats,
     activeSwarms,
     swarmTemplates,
+    smartRouter: smartRouterData,
   });
 });
 

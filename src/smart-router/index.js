@@ -62,7 +62,8 @@ export class SmartRouter {
     while (attempts <= maxRetries) {
       try {
         const executor = selection.type === "FREE" ? this.freeExecutor : this.paidExecutor;
-        result = await executor.execute(selection.model, messages, opts);
+        const execOpts = { ...opts, useNvidiaDirect: selection.useNvidiaDirect };
+        result = await executor.execute(selection.model, messages, execOpts);
         this.scaler.recordSuccess(selection.modelKey);
         break;
       } catch (err) {

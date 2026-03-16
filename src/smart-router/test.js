@@ -165,6 +165,41 @@ const router = new ModelRouter();
   assert(sel.modelKey !== "nemotron-nano-9b", "disabled model skipped");
 }
 
+// ─── NVIDIA Direct API Tests (simulated) ────────────────────────────
+
+console.log("\n▸ ModelRouter (NVIDIA direct)");
+
+// Simulate NVIDIA_API_KEY being set
+process.env.NVIDIA_API_KEY = "test-nvidia-key";
+// Force config to pick it up (config reads env at access time for nvidiaApiKey)
+{
+  const { ModelRouter: MR } = await import("./model-router.js");
+  const nRouter = new MR();
+
+  assert(nRouter.hasNvidiaDirect === true, "detects NVIDIA_API_KEY");
+
+  // Routine with NVIDIA → prefers NVIDIA direct models
+  const sel = nRouter.select({ classification: "ROUTINE", inputTokens: 500, hasImage: false, complexity: "low" });
+  assert(sel.useNvidiaDirect === true, "routine routes to NVIDIA direct");
+  assert(sel.type === "FREE", "NVIDIA direct is FREE type");
+
+  // Important high → NVIDIA direct (nemotron ultra or deepseek)
+  const sel2 = nRouter.select({ classification: "IMPORTANT", inputTokens: 2000, hasImage: false, complexity: "high" });
+  assert(sel2.useNvidiaDirect === true, "important high → NVIDIA direct");
+  assert(sel2.modelKey === "nvidia-nemotron-ultra-253b", "high complexity → ultra-253b");
+
+  // Very high → DeepSeek R1
+  const sel3 = nRouter.select({ classification: "IMPORTANT", inputTokens: 2000, hasImage: false, complexity: "very_high" });
+  assert(sel3.modelKey === "nvidia-deepseek-r1", "very_high → deepseek-r1");
+
+  // Fallback from NVIDIA direct → paid
+  nRouter.disableModel("nvidia-deepseek-r1", 100);
+  const fb = nRouter.getFallback("nvidia-deepseek-r1", { classification: "IMPORTANT" });
+  assert(fb !== null, "NVIDIA fallback exists");
+}
+// Clean up
+delete process.env.NVIDIA_API_KEY;
+
 // ─── CostTracker Tests ──────────────────────────────────────────────
 
 console.log("\n▸ CostTracker");
