@@ -8,6 +8,7 @@ import express from "express";
 import httpProxy from "http-proxy";
 import pty from "node-pty";
 import { WebSocketServer } from "ws";
+import { registerSmartRouterRoutes } from "./smart-router/routes.js";
 
 const PORT = Number.parseInt(process.env.PORT ?? "8080", 10);
 const STATE_DIR =
@@ -475,6 +476,9 @@ app.use(express.json({ limit: "1mb" }));
 
 // Minimal health endpoint for Railway.
 app.get("/setup/healthz", (_req, res) => res.json({ ok: true }));
+
+// Smart Router API (inherits /setup auth from middleware above)
+registerSmartRouterRoutes(app);
 
 // ========== LIGHTWEIGHT RATE LIMITER FOR PUBLIC ENDPOINTS ==========
 const publicRateLimiter = {
