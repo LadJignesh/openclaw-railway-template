@@ -9,6 +9,7 @@ import httpProxy from "http-proxy";
 import pty from "node-pty";
 import { WebSocketServer } from "ws";
 import { registerSmartRouterRoutes } from "./smart-router/routes.js";
+import { buildAutoSetupPayload, detectProvider } from "./auto-setup.js";
 
 const PORT = Number.parseInt(process.env.PORT ?? "8080", 10);
 const STATE_DIR =
@@ -564,7 +565,8 @@ app.get("/setup/logout", (_req, res) => {
 });
 
 app.get("/setup", requireSetupAuth, (_req, res) => {
-  res.sendFile(path.join(process.cwd(), "src", "public", "setup.html"));
+  // Wizard removed — serve admin dashboard instead (debug console, config editor, backup)
+  res.sendFile(path.join(process.cwd(), "src", "public", "dashboard.html"));
 });
 
 app.get("/setup/api/status", requireSetupAuth, async (_req, res) => {
@@ -785,6 +787,99 @@ function buildOnboardArgs(payload) {
   }
 
   return args;
+}
+
+// ========== AUTO-SETUP (headless onboarding from env vars) ==========
+
+let autoSetupRunning = false;
+let autoSetupDone = false;
+
+async function runAutoSetup() {
+  if (autoSetupRunning || autoSetupDone || isConfigured()) return;
+
+  const payload = buildAutoSetupPayload();
+  if (!payload) {
+    console.error(
+      "[auto-setup] No API key detected in environment. Set one of: " +
+      "ANTHROPIC_API_KEY, OPENAI_API_KEY, OPENROUTER_API_KEY, GEMINI_API_KEY, " +
+      "MOONSHOT_API_KEY, or MINIMAX_API_KEY",
+    );
+    return;
+  }
+
+  autoSetupRunning = true;
+  console.log(`[auto-setup] Detected provider: ${payload._provider.label} (${payload._provider.envVar})`);
+
+  try {
+    fs.mkdirSync(STATE_DIR, { recursive: true });
+    fs.mkdirSync(WORKSPACE_DIR, { recursive: true });
+
+    // Run onboarding
+    const onboardArgs = buildOnboardArgs(payload);
+    console.log("[auto-setup] Running onboarding...");
+    const onboard = await runCmd(OPENCLAW_NODE, clawArgs(onboardArgs));
+    console.log(`[auto-setup] Onboarding exit=${onboard.code} configured=${isConfigured()}`);
+
+    if (onboard.code !== 0 || !isConfigured()) {
+      console.error(`[auto-setup] Onboarding failed:\n${onboard.output}`);
+      return;
+    }
+
+    // Configure gateway settings (same as /setup/api/run)
+    await runCmd(OPENCLAW_NODE, clawArgs(["config", "set", "gateway.controlUi.allowInsecureAuth", "true"]));
+    await runCmd(OPENCLAW_NODE, clawArgs(["config", "set", "gateway.auth.token", OPENCLAW_GATEWAY_TOKEN]));
+    await runCmd(OPENCLAW_NODE, clawArgs(["config", "set", "--json", "gateway.trustedProxies", '["127.0.0.1"]']));
+    console.log("[auto-setup] Gateway settings configured.");
+
+    // Set model if specified
+    if (payload.model) {
+      const mr = await runCmd(OPENCLAW_NODE, clawArgs(["models", "set", payload.model]));
+      console.log(`[auto-setup] Model set to ${payload.model} (exit=${mr.code})`);
+    }
+
+    // Configure channels from env vars
+    async function autoConfigChannel(name, cfgObj) {
+      const r = await runCmd(OPENCLAW_NODE, clawArgs(["config", "set", "--json", `channels.${name}`, JSON.stringify(cfgObj)]));
+      console.log(`[auto-setup] Channel ${name} configured (exit=${r.code})`);
+    }
+
+    if (payload.telegramToken) {
+      await autoConfigChannel("telegram", {
+        enabled: true,
+        dmPolicy: "pairing",
+        botToken: payload.telegramToken,
+        groupPolicy: "allowlist",
+        streamMode: "partial",
+      });
+    }
+
+    if (payload.discordToken) {
+      await autoConfigChannel("discord", {
+        enabled: true,
+        token: payload.discordToken,
+        groupPolicy: "allowlist",
+        dm: { policy: "pairing" },
+      });
+    }
+
+    if (payload.slackBotToken || payload.slackAppToken) {
+      await autoConfigChannel("slack", {
+        enabled: true,
+        botToken: payload.slackBotToken || undefined,
+        appToken: payload.slackAppToken || undefined,
+      });
+    }
+
+    // Start gateway
+    console.log("[auto-setup] Starting gateway...");
+    await restartGateway();
+    console.log("[auto-setup] Setup complete — gateway running.");
+    autoSetupDone = true;
+  } catch (err) {
+    console.error(`[auto-setup] Error: ${err.message}`);
+  } finally {
+    autoSetupRunning = false;
+  }
 }
 
 function runCmd(cmd, args, opts = {}) {
@@ -2559,8 +2654,17 @@ proxy.on("proxyReqWs", (proxyReq, req, socket, options, head) => {
 // into browser history, server logs, and Referer headers.
 
 app.use(async (req, res) => {
+  // Auto-setup: if not configured, run headless onboarding from env vars
   if (!isConfigured() && !req.path.startsWith("/setup")) {
-    return res.redirect("/setup");
+    if (!autoSetupRunning && !autoSetupDone) {
+      // Fire auto-setup in background — don't await, show loading page
+      runAutoSetup().catch((err) =>
+        console.error(`[auto-setup] background error: ${err.message}`),
+      );
+    }
+    return res
+      .status(503)
+      .sendFile(path.join(process.cwd(), "src", "public", "loading.html"));
   }
 
   if (isConfigured()) {
@@ -2587,7 +2691,7 @@ app.use(async (req, res) => {
 
 const server = app.listen(PORT, () => {
   console.log(`[wrapper] listening on port ${PORT}`);
-  console.log(`[wrapper] setup wizard: http://localhost:${PORT}/setup`);
+  console.log(`[wrapper] admin panel: http://localhost:${PORT}/setup`);
   console.log(`[wrapper] web TUI: ${ENABLE_WEB_TUI ? "enabled" : "disabled"}`);
   console.log(`[wrapper] configured: ${isConfigured()}`);
 
@@ -2602,9 +2706,8 @@ const server = app.listen(PORT, () => {
     fs.chmodSync(path.join(STATE_DIR, "credentials"), 0o700);
   } catch {}
 
-  // Auto-start the gateway if already configured so polling channels (Telegram/Discord/etc.)
-  // work even if nobody visits the web UI.
   if (isConfigured()) {
+    // Already configured — start gateway immediately
     (async () => {
       try {
         console.log("[wrapper] running openclaw doctor --fix...");
@@ -2617,6 +2720,12 @@ const server = app.listen(PORT, () => {
       await ensureGatewayRunning();
     })().catch((err) => {
       console.error(`[wrapper] failed to start gateway at boot: ${err.message}`);
+    });
+  } else {
+    // Not configured — run auto-setup from environment variables
+    console.log("[wrapper] Not configured — starting auto-setup from env vars...");
+    runAutoSetup().catch((err) => {
+      console.error(`[wrapper] auto-setup failed at boot: ${err.message}`);
     });
   }
 });
