@@ -276,10 +276,9 @@ app.get("/setup/api/status", requireSetupAuth, async (_req, res) => {
       { value: "minimax/m2.1-lightning", label: "MiniMax M2.1 Lightning", tier: "low" },
     ],
     nvidia: [
-      { value: "nvidia/llama-3.3-nemotron-super-49b-v1", label: "Nemotron Super 49B (recommended, free)", tier: "free" },
-      { value: "nvidia/llama-3.1-nemotron-70b-instruct", label: "Nemotron 70B Instruct (free)", tier: "free" },
-      { value: "deepseek-ai/deepseek-r1", label: "DeepSeek R1 (free, reasoning)", tier: "free" },
-      { value: "meta/llama-3.1-405b-instruct", label: "Llama 3.1 405B (free)", tier: "free" },
+      { value: "nvidia/nemotron-3-super-120b-a12b", label: "Nemotron 3 Super 120B (recommended, free)", tier: "free" },
+      { value: "nvidia/nemotron-3-nano-30b-a3b", label: "Nemotron 3 Nano 30B (fast, free)", tier: "free" },
+      { value: "deepseek-ai/deepseek-v3.2", label: "DeepSeek V3.2 (reasoning, free)", tier: "free" },
     ],
   };
 
@@ -353,7 +352,7 @@ async function registerSmartRouterModels() {
   if (smartConfig.nvidiaApiKey) {
     const nvidiaBase = {
       baseUrl: "https://integrate.api.nvidia.com/v1",
-      apiKey: "NVIDIA_API_KEY",
+      apiKey: smartConfig.nvidiaApiKey,
       api: "openai-completions",
     };
 
@@ -361,16 +360,8 @@ async function registerSmartRouterModels() {
     const nvidiaProvider = {
       ...nvidiaBase,
       models: [
-        { id: "nvidia/llama-3.3-nemotron-super-49b-v1", name: "Nemotron Super 49B", contextWindow: 32768, maxTokens: 4096, input: ["text"] },
-        { id: "nvidia/llama-3.1-nemotron-70b-instruct", name: "Nemotron 70B Instruct", contextWindow: 131072, maxTokens: 4096, input: ["text"] },
-      ],
-    };
-
-    // Provider "meta" → handles meta/* model IDs
-    const metaProvider = {
-      ...nvidiaBase,
-      models: [
-        { id: "meta/llama-3.1-405b-instruct", name: "Llama 3.1 405B", contextWindow: 131072, maxTokens: 4096, input: ["text"] },
+        { id: "nvidia/nemotron-3-nano-30b-a3b", name: "Nemotron 3 Nano 30B", contextWindow: 32768, maxTokens: 4096, input: ["text"] },
+        { id: "nvidia/nemotron-3-super-120b-a12b", name: "Nemotron 3 Super 120B", contextWindow: 131072, maxTokens: 16384, input: ["text"] },
       ],
     };
 
@@ -378,7 +369,7 @@ async function registerSmartRouterModels() {
     const deepseekProvider = {
       ...nvidiaBase,
       models: [
-        { id: "deepseek-ai/deepseek-r1", name: "DeepSeek R1", reasoning: true, contextWindow: 65536, maxTokens: 8192, input: ["text"] },
+        { id: "deepseek-ai/deepseek-v3.2", name: "DeepSeek V3.2", reasoning: true, contextWindow: 128000, maxTokens: 8192, input: ["text"] },
       ],
     };
 
@@ -386,7 +377,6 @@ async function registerSmartRouterModels() {
       mode: "merge",
       providers: {
         nvidia: nvidiaProvider,
-        meta: metaProvider,
         "deepseek-ai": deepseekProvider,
       },
     };
@@ -395,28 +385,27 @@ async function registerSmartRouterModels() {
       log.warn("failed to register NVIDIA models", { exit: result.code, output: result.output?.slice(0, 200) });
     } else {
       log.info("NVIDIA models registered in Openclaw config", {
-        providers: ["nvidia", "meta", "deepseek-ai"],
-        models: [...nvidiaProvider.models, ...metaProvider.models, ...deepseekProvider.models].map((m) => m.id),
+        providers: ["nvidia", "deepseek-ai"],
+        models: [...nvidiaProvider.models, ...deepseekProvider.models].map((m) => m.id),
       });
     }
 
     // Set agent default model — IDs match exactly what NVIDIA API expects
     // and each prefix matches a registered Openclaw provider
     await clawCmd(["config", "set", "--json", "agents.defaults.model", JSON.stringify({
-      primary: "nvidia/llama-3.3-nemotron-super-49b-v1",
-      fallbacks: ["deepseek-ai/deepseek-r1", "meta/llama-3.1-405b-instruct"],
+      primary: "nvidia/nemotron-3-super-120b-a12b",
+      fallbacks: ["deepseek-ai/deepseek-v3.2", "nvidia/nemotron-3-nano-30b-a3b"],
     })]);
 
     // Register aliases for easy switching via /model
     const modelAliases = {
-      "nvidia/llama-3.3-nemotron-super-49b-v1": { alias: "nemotron-49b" },
-      "nvidia/llama-3.1-nemotron-70b-instruct": { alias: "nemotron-70b" },
-      "deepseek-ai/deepseek-r1": { alias: "deepseek" },
-      "meta/llama-3.1-405b-instruct": { alias: "llama-405b" },
+      "nvidia/nemotron-3-nano-30b-a3b": { alias: "nemotron-30b" },
+      "nvidia/nemotron-3-super-120b-a12b": { alias: "nemotron-120b" },
+      "deepseek-ai/deepseek-v3.2": { alias: "deepseek" },
     };
     await clawCmd(["config", "set", "--json", "agents.defaults.models", JSON.stringify(modelAliases)]);
 
-    log.info("agent defaults set to NVIDIA models (nemotron-49b primary)");
+    log.info("agent defaults set to NVIDIA models (nemotron-120b primary)");
   }
 
   // Register OpenRouter free models if API key is set

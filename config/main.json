@@ -78,11 +78,9 @@
       "openai/gpt-4o-mini":                   { "inputPer1M": 0.15, "outputPer1M": 0.60 },
       "minimax/m2.1":                          { "inputPer1M": 0.14, "outputPer1M": 0.56 },
       "minimax/m2.1-lightning":                { "inputPer1M": 0.07, "outputPer1M": 0.28 },
-      "nvidia/llama-3.1-nemotron-70b-instruct":     { "inputPer1M": 0.00, "outputPer1M": 0.00 },
-      "nvidia/llama-3.3-nemotron-super-49b-v1":     { "inputPer1M": 0.00, "outputPer1M": 0.00 },
-      "nvidia/llama-3.1-nemotron-ultra-253b-v1":    { "inputPer1M": 0.00, "outputPer1M": 0.00 },
-      "meta/llama-3.1-405b-instruct":               { "inputPer1M": 0.00, "outputPer1M": 0.00 },
-      "deepseek-ai/deepseek-r1":                    { "inputPer1M": 0.00, "outputPer1M": 0.00 }
+      "nvidia/nemotron-3-nano-30b-a3b":               { "inputPer1M": 0.00, "outputPer1M": 0.00 },
+      "nvidia/nemotron-3-super-120b-a12b":              { "inputPer1M": 0.00, "outputPer1M": 0.00 },
+      "deepseek-ai/deepseek-v3.2":                      { "inputPer1M": 0.00, "outputPer1M": 0.00 }
     }
   },
 

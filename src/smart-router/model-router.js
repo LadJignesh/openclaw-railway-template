@@ -148,18 +148,15 @@ export class ModelRouter {
       modelKey: key, model: nvidiaDirectModels[key], type: "FREE", useNvidiaDirect: true,
     });
 
-    if (["low", "very_low"].includes(complexity) && !this._isDisabled("nvidia-nemotron-super-49b")) {
-      return pick("nvidia-nemotron-super-49b");
+    if (["low", "very_low", "low_medium"].includes(complexity) && !this._isDisabled("nvidia-nemotron-nano-30b")) {
+      return pick("nvidia-nemotron-nano-30b");
     }
-    if (["low_medium", "medium"].includes(complexity) && !this._isDisabled("nvidia-nemotron-70b")) {
-      return pick("nvidia-nemotron-70b");
-    }
-    if ((complexity === "medium_high" || complexity === "high") && !this._isDisabled("nvidia-llama-405b")) {
-      return pick("nvidia-llama-405b");
+    if (["medium", "medium_high", "high"].includes(complexity) && !this._isDisabled("nvidia-nemotron-super-120b")) {
+      return pick("nvidia-nemotron-super-120b");
     }
     if (complexity === "very_high") {
-      if (!this._isDisabled("nvidia-deepseek-r1")) return pick("nvidia-deepseek-r1");
-      if (!this._isDisabled("nvidia-llama-405b")) return pick("nvidia-llama-405b");
+      if (!this._isDisabled("nvidia-deepseek-v3")) return pick("nvidia-deepseek-v3");
+      if (!this._isDisabled("nvidia-nemotron-super-120b")) return pick("nvidia-nemotron-super-120b");
     }
 
     return null;

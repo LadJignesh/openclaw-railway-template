@@ -54,36 +54,29 @@ const config = {
   },
 
   // Tier 1: Direct NVIDIA API (free tier, requires NVIDIA_API_KEY)
+  // Model IDs must match currently available "Free Endpoint" models on build.nvidia.com
   nvidiaDirectModels: {
-    "nvidia-nemotron-super-49b": {
-      id: "nvidia/llama-3.3-nemotron-super-49b-v1",
-      name: "Nemotron Super 49B",
+    "nvidia-nemotron-nano-30b": {
+      id: "nvidia/nemotron-3-nano-30b-a3b",
+      name: "Nemotron 3 Nano 30B",
       maxInputTokens: 32000,
-      complexity: "medium",
+      complexity: "low_medium",
       capabilities: ["text"],
       costPerMillionTokens: 0,
     },
-    "nvidia-nemotron-70b": {
-      id: "nvidia/llama-3.1-nemotron-70b-instruct",
-      name: "Nemotron 70B Instruct",
+    "nvidia-nemotron-super-120b": {
+      id: "nvidia/nemotron-3-super-120b-a12b",
+      name: "Nemotron 3 Super 120B",
       maxInputTokens: 131072,
-      complexity: "medium_high",
+      complexity: "high",
       capabilities: ["text", "reasoning"],
       costPerMillionTokens: 0,
     },
-    "nvidia-llama-405b": {
-      id: "meta/llama-3.1-405b-instruct",
-      name: "Llama 3.1 405B",
+    "nvidia-deepseek-v3": {
+      id: "deepseek-ai/deepseek-v3.2",
+      name: "DeepSeek V3.2",
       maxInputTokens: 128000,
-      complexity: "high",
-      capabilities: ["text", "reasoning"],
-      costPerMillionTokens: 0,
-    },
-    "nvidia-deepseek-r1": {
-      id: "deepseek-ai/deepseek-r1",
-      name: "DeepSeek R1",
-      maxInputTokens: 64000,
-      complexity: "high",
+      complexity: "very_high",
       capabilities: ["text", "reasoning"],
       costPerMillionTokens: 0,
     },
@@ -130,10 +123,9 @@ const config = {
       "nemotron-super-120b",
     ],
     nvidia: [
-      "nvidia-nemotron-super-49b",
-      "nvidia-nemotron-70b",
-      "nvidia-llama-405b",
-      "nvidia-deepseek-r1",
+      "nvidia-nemotron-nano-30b",
+      "nvidia-nemotron-super-120b",
+      "nvidia-deepseek-v3",
     ],
     paid: ["claude-3-5-sonnet", "claude-3-opus", "gpt-4o"],
   },

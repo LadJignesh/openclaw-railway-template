@@ -188,18 +188,18 @@ process.env.NVIDIA_API_KEY = "test-nvidia-key";
   assert(sel.useNvidiaDirect === true, "medium routine routes to NVIDIA direct");
   assert(sel.type === "FREE", "NVIDIA direct is FREE type");
 
-  // Important high → NVIDIA direct (llama-405b for high complexity)
+  // Important high → NVIDIA direct (super-120b for high complexity)
   const sel2 = nRouter.select({ classification: "IMPORTANT", inputTokens: 2000, hasImage: false, complexity: "high" });
   assert(sel2.useNvidiaDirect === true, "important high → NVIDIA direct");
-  assert(sel2.modelKey === "nvidia-llama-405b", "high complexity → llama-405b");
+  assert(sel2.modelKey === "nvidia-nemotron-super-120b", "high complexity → nemotron-super-120b");
 
-  // Very high → DeepSeek R1
+  // Very high → DeepSeek V3
   const sel3 = nRouter.select({ classification: "IMPORTANT", inputTokens: 2000, hasImage: false, complexity: "very_high" });
-  assert(sel3.modelKey === "nvidia-deepseek-r1", "very_high → deepseek-r1");
+  assert(sel3.modelKey === "nvidia-deepseek-v3", "very_high → deepseek-v3");
 
   // Fallback from NVIDIA direct → paid
-  nRouter.disableModel("nvidia-deepseek-r1", 100);
-  const fb = nRouter.getFallback("nvidia-deepseek-r1", { classification: "IMPORTANT" });
+  nRouter.disableModel("nvidia-deepseek-v3", 100);
+  const fb = nRouter.getFallback("nvidia-deepseek-v3", { classification: "IMPORTANT" });
   assert(fb !== null, "NVIDIA fallback exists");
 }
 // Clean up

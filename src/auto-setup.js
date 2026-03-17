@@ -60,10 +60,9 @@ export function detectNvidia() {
 
   // Default Nvidia models available via integrate.api.nvidia.com
   const defaultModels = [
-    "nvidia/llama-3.3-nemotron-super-49b-v1",
-    "nvidia/llama-3.1-nemotron-70b-instruct",
-    "meta/llama-3.1-405b-instruct",
-    "deepseek-ai/deepseek-r1",
+    "nvidia/nemotron-3-super-120b-a12b",
+    "nvidia/nemotron-3-nano-30b-a3b",
+    "deepseek-ai/deepseek-v3.2",
   ];
 
   // Allow overriding models via env var (comma-separated)
@@ -89,7 +88,7 @@ export function buildAutoSetupPayload() {
   // and default to an NVIDIA-hosted model
   const isNvidiaOnly = provider.nvidia === true;
   const defaultModel = isNvidiaOnly
-    ? "nvidia/llama-3.3-nemotron-super-49b-v1"
+    ? "nvidia/nemotron-3-super-120b-a12b"
     : undefined;
 
   return {
