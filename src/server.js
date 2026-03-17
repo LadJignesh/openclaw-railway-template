@@ -275,6 +275,13 @@ app.get("/setup/api/status", requireSetupAuth, async (_req, res) => {
       { value: "minimax/m2.1", label: "MiniMax M2.1", tier: "mid" },
       { value: "minimax/m2.1-lightning", label: "MiniMax M2.1 Lightning", tier: "low" },
     ],
+    nvidia: [
+      { value: "qwen/qwen3.5-122b-a10b", label: "Qwen 3.5 122B MoE (recommended, free)", tier: "free" },
+      { value: "nvidia/llama-3.3-nemotron-super-49b-v1", label: "Nemotron Super 49B (free)", tier: "free" },
+      { value: "nvidia/llama-3.1-nemotron-ultra-253b-v1", label: "Nemotron Ultra 253B (free)", tier: "free" },
+      { value: "deepseek-ai/deepseek-r1", label: "DeepSeek R1 (free, reasoning)", tier: "free" },
+      { value: "meta/llama-3.1-405b-instruct", label: "Llama 3.1 405B (free)", tier: "free" },
+    ],
   };
 
   const detectedProviders = [];
@@ -284,6 +291,7 @@ app.get("/setup/api/status", requireSetupAuth, async (_req, res) => {
   if (process.env.GOOGLE_CREDENTIALS_JSON || process.env.GEMINI_API_KEY) detectedProviders.push("google");
   if (process.env.MOONSHOT_API_KEY) detectedProviders.push("moonshot");
   if (process.env.MINIMAX_API_KEY) detectedProviders.push("minimax");
+  if (process.env.NVIDIA_API_KEY) detectedProviders.push("nvidia");
 
   res.json({
     configured: gateway.isConfigured,

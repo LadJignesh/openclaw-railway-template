@@ -116,6 +116,13 @@
         const models = this.providerModels[group] || [];
         const detected = this.detectedProviders.includes(group);
         this.modelList = models.map(m => ({ ...m, detected }));
+
+        // Always append NVIDIA models if NVIDIA_API_KEY is detected (free models available with any auth)
+        if (this.detectedProviders.includes('nvidia') && group !== 'nvidia') {
+          const nvidiaModels = (this.providerModels['nvidia'] || []).map(m => ({ ...m, detected: true }));
+          this.modelList = [...this.modelList, ...nvidiaModels];
+        }
+
         if (this.modelList.length > 0 && !this.modelList.find(m => m.value === this.model)) {
           this.model = this.modelList[0].value;
         }
