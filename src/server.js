@@ -334,6 +334,50 @@ function buildOnboardArgs(payload) {
   return args;
 }
 
+// ═══ MODEL AUTO-REGISTRATION ═══
+// Syncs smart-router models into Openclaw's config so the agent knows about them.
+
+async function registerSmartRouterModels() {
+  const smartConfig = (await import("./smart-router/config.js")).default;
+  const providers = [];
+
+  // Register NVIDIA direct models if API key is set
+  if (smartConfig.nvidiaApiKey) {
+    const nvidiaModels = Object.values(smartConfig.nvidiaDirectModels).map((m) => m.id);
+    providers.push({
+      id: "nvidia",
+      type: "openai",
+      apiBase: "https://integrate.api.nvidia.com/v1",
+      apiKeyEnv: "NVIDIA_API_KEY",
+      models: nvidiaModels,
+    });
+    log.info("registering NVIDIA models with Openclaw", { count: nvidiaModels.length, models: nvidiaModels });
+  }
+
+  // Register OpenRouter free models if API key is set
+  if (smartConfig.openrouterApiKey) {
+    const orModels = Object.values(smartConfig.freeModels).map((m) => m.id);
+    providers.push({
+      id: "openrouter",
+      type: "openai",
+      apiBase: "https://openrouter.ai/api/v1",
+      apiKeyEnv: "OPENROUTER_API_KEY",
+      models: orModels,
+    });
+    log.info("registering OpenRouter models with Openclaw", { count: orModels.length });
+  }
+
+  if (providers.length === 0) return;
+
+  const modelsConfig = { mode: "merge", providers };
+  const result = await clawCmd(["config", "set", "--json", "models", JSON.stringify(modelsConfig)]);
+  if (result.code !== 0) {
+    log.warn("failed to register smart-router models", { exit: result.code, output: result.output?.slice(0, 200) });
+  } else {
+    log.info("smart-router models registered in Openclaw config");
+  }
+}
+
 // ═══ AUTO-SETUP ═══
 let autoSetupRunning = false;
 let autoSetupDone = false;
@@ -398,7 +442,7 @@ async function runAutoSetup() {
       });
     }
 
-    // NVIDIA provider
+    // NVIDIA provider (legacy auto-setup detection)
     const nvidia = detectNvidia();
     if (nvidia) {
       log.info("configuring NVIDIA provider", { models: nvidia.models.length });
@@ -407,6 +451,9 @@ async function runAutoSetup() {
         apiKeyEnvVar: "NVIDIA_API_KEY", models: nvidia.models,
       })]);
     }
+
+    // Register all smart-router models so Openclaw agent recognizes them
+    await registerSmartRouterModels();
 
     log.info("starting gateway after auto-setup");
     await gateway.restart();
@@ -488,6 +535,10 @@ app.post("/setup/api/run", requireSetupAuth, async (req, res) => {
           enabled: true, botToken: payload.slackBotToken?.trim(), appToken: payload.slackAppToken?.trim(),
         });
       }
+
+      // Register smart-router models so Openclaw agent recognizes them
+      await registerSmartRouterModels();
+      extra += "[setup] Smart-router models registered.\n";
 
       await gateway.restart();
       extra += "[setup] Gateway started.\n";

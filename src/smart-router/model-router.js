@@ -141,8 +141,8 @@ export class ModelRouter {
     if (["low", "very_low"].includes(complexity) && !this._isDisabled("nvidia-nemotron-super-49b")) {
       return pick("nvidia-nemotron-super-49b");
     }
-    if (["low_medium", "medium"].includes(complexity) && !this._isDisabled("nvidia-nemotron-70b")) {
-      return pick("nvidia-nemotron-70b");
+    if (["low_medium", "medium"].includes(complexity) && !this._isDisabled("nvidia-qwen-122b")) {
+      return pick("nvidia-qwen-122b");
     }
     if ((complexity === "medium_high" || complexity === "high") && !this._isDisabled("nvidia-nemotron-ultra-253b")) {
       return pick("nvidia-nemotron-ultra-253b");

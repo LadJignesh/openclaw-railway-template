@@ -63,9 +63,9 @@ const config = {
       capabilities: ["text"],
       costPerMillionTokens: 0,
     },
-    "nvidia-nemotron-70b": {
-      id: "nvidia/llama-3.1-nemotron-70b-instruct",
-      name: "Nemotron 70B Instruct",
+    "nvidia-qwen-122b": {
+      id: "qwen/qwen3.5-122b-a10b",
+      name: "Qwen 3.5 122B (10B active MoE)",
       maxInputTokens: 32000,
       complexity: "medium_high",
       capabilities: ["text", "reasoning"],
@@ -139,7 +139,7 @@ const config = {
     ],
     nvidia: [
       "nvidia-nemotron-super-49b",
-      "nvidia-nemotron-70b",
+      "nvidia-qwen-122b",
       "nvidia-nemotron-ultra-253b",
       "nvidia-llama-405b",
       "nvidia-deepseek-r1",
