@@ -237,6 +237,9 @@ const tracker = new CostTracker();
     success: true,
   });
 
+  // Wait for async flush to complete before reading back
+  await new Promise((r) => setTimeout(r, 100));
+
   const summary = tracker.dailySummary();
   assert(summary.totalTasks >= 2, "summary counts tasks");
   assert(summary.freeModelTasks >= 1, "summary counts free tasks");

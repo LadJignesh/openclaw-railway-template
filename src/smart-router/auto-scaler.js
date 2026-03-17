@@ -1,48 +1,34 @@
-// AutoScaler — handles automatic fallback/escalation when a model fails
-// and tracks error rates to temporarily disable unreliable models.
+// AutoScaler — tracks error rates and auto-disables failing models.
+// Integrates with the alerting system.
 
 import config from "./config.js";
+import { alerts, AlertType } from "../lib/alerts.js";
+import { createLogger } from "../lib/logger.js";
+
+const log = createLogger("auto-scaler");
 
 export class AutoScaler {
   constructor(modelRouter) {
     this.router = modelRouter;
-    // Track errors per model: modelKey -> { errors: number, total: number }
-    this.stats = new Map();
+    this.stats = new Map(); // modelKey → { errors, total, lastError }
   }
 
-  /**
-   * Record a successful execution for a model.
-   */
   recordSuccess(modelKey) {
     const s = this._getStats(modelKey);
     s.total++;
     this._checkErrorRate(modelKey);
   }
 
-  /**
-   * Record a failed execution and return a fallback selection (or null).
-   * @param {string} modelKey - the model that failed
-   * @param {object} classification - original task classification
-   * @returns {object|null} fallback { modelKey, model, type } or null
-   */
   recordFailureAndGetFallback(modelKey, classification) {
     const s = this._getStats(modelKey);
     s.errors++;
     s.total++;
+    s.lastError = new Date().toISOString();
 
     this._checkErrorRate(modelKey);
-
-    // Get fallback from router
     return this.router.getFallback(modelKey, classification);
   }
 
-  /**
-   * Check if quality score warrants escalation.
-   * @param {number} qualityScore - 0-1, from user feedback or heuristic
-   * @param {string} currentModelKey
-   * @param {object} classification
-   * @returns {object|null} escalation target or null
-   */
   checkQualityEscalation(qualityScore, currentModelKey, classification) {
     if (qualityScore < config.routing.qualityThreshold) {
       return this.router.getFallback(currentModelKey, classification);
@@ -50,9 +36,6 @@ export class AutoScaler {
     return null;
   }
 
-  /**
-   * Get error stats for all models.
-   */
   getStats() {
     const result = {};
     for (const [key, val] of this.stats) {
@@ -64,32 +47,34 @@ export class AutoScaler {
     return result;
   }
 
-  /**
-   * Reset stats (e.g., daily reset).
-   */
   resetStats() {
     this.stats.clear();
   }
 
   _getStats(modelKey) {
     if (!this.stats.has(modelKey)) {
-      this.stats.set(modelKey, { errors: 0, total: 0 });
+      this.stats.set(modelKey, { errors: 0, total: 0, lastError: null });
     }
     return this.stats.get(modelKey);
   }
 
   _checkErrorRate(modelKey) {
     const s = this._getStats(modelKey);
-    if (s.total < 5) return; // need minimum sample size
+    if (s.total < 5) return; // need minimum sample
 
     const errorRate = s.errors / s.total;
     if (errorRate > config.routing.errorRateThreshold) {
-      this.router.disableModel(modelKey, 300_000); // 5 min cooldown
-      console.warn(
-        `[auto-scaler] disabled ${modelKey} — error rate ${(errorRate * 100).toFixed(1)}% exceeds threshold`,
-      );
-      // Reset stats after disabling so it gets a fresh chance later
-      this.stats.set(modelKey, { errors: 0, total: 0 });
+      this.router.disableModel(modelKey, 300_000);
+
+      const pct = (errorRate * 100).toFixed(1);
+      log.warn("model disabled due to high error rate", { model: modelKey, errorRate: pct });
+
+      alerts.alert(AlertType.MODEL_DISABLED,
+        `Model ${modelKey} disabled — error rate ${pct}% exceeds threshold`,
+        { model: modelKey, errorRate, errors: s.errors, total: s.total });
+
+      // Reset for fair retry after cooldown
+      this.stats.set(modelKey, { errors: 0, total: 0, lastError: s.lastError });
     }
   }
 }

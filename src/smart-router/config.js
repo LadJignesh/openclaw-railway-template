@@ -1,8 +1,8 @@
-// Smart Router Configuration
-// All API keys via environment variables — NEVER hardcode secrets.
+// Smart Router Configuration — all API keys via env var getters.
+// Models organized by tier with clear escalation paths.
 
 const config = {
-  // API Keys (from environment)
+  // API Keys (getters so env vars set after import are respected)
   get openrouterApiKey() { return process.env.OPENROUTER_API_KEY || ""; },
   get anthropicApiKey() { return process.env.ANTHROPIC_API_KEY || ""; },
   get openaiApiKey() { return process.env.OPENAI_API_KEY || ""; },
@@ -12,8 +12,8 @@ const config = {
   openrouterBaseUrl: "https://openrouter.ai/api/v1/chat/completions",
   nvidiaBaseUrl: "https://integrate.api.nvidia.com/v1/chat/completions",
 
-  // Free/low-cost Nvidia models — uses direct NVIDIA API if NVIDIA_API_KEY is set,
-  // otherwise falls back to OpenRouter free tier.
+  // ═══ MODEL TIERS ═══
+  // Tier 0: Free OpenRouter models (no API key cost)
   freeModels: {
     "nemotron-nano-9b": {
       id: "nvidia/nemotron-nano-9b-v2:free",
@@ -53,23 +53,22 @@ const config = {
     },
   },
 
-  // Direct NVIDIA API models (requires NVIDIA_API_KEY)
-  // These use integrate.api.nvidia.com — not free but very cheap.
+  // Tier 1: Direct NVIDIA API (free tier, requires NVIDIA_API_KEY)
   nvidiaDirectModels: {
-    "nvidia-nemotron-70b": {
-      id: "nvidia/llama-3.1-nemotron-70b-instruct",
-      name: "Nemotron 70B Instruct",
-      maxInputTokens: 32000,
-      complexity: "medium_high",
-      capabilities: ["text", "reasoning"],
-      costPerMillionTokens: 0,  // free tier on NVIDIA API
-    },
     "nvidia-nemotron-super-49b": {
       id: "nvidia/llama-3.3-nemotron-super-49b-v1",
       name: "Nemotron Super 49B",
       maxInputTokens: 32000,
       complexity: "medium",
       capabilities: ["text"],
+      costPerMillionTokens: 0,
+    },
+    "nvidia-nemotron-70b": {
+      id: "nvidia/llama-3.1-nemotron-70b-instruct",
+      name: "Nemotron 70B Instruct",
+      maxInputTokens: 32000,
+      complexity: "medium_high",
+      capabilities: ["text", "reasoning"],
       costPerMillionTokens: 0,
     },
     "nvidia-nemotron-ultra-253b": {
@@ -98,7 +97,7 @@ const config = {
     },
   },
 
-  // Paid models
+  // Tier 2: Paid models (Anthropic, OpenAI)
   paidModels: {
     "claude-3-5-sonnet": {
       id: "claude-3-5-sonnet-20241022",
@@ -129,20 +128,52 @@ const config = {
     },
   },
 
-  // Routing configuration
-  routing: {
-    freeModelPriority: true,
-    escalationThreshold: "high",
-    dailyCostBudget: parseFloat(process.env.SMART_ROUTER_DAILY_BUDGET || "50"),
-    budgetWarnThreshold: 0.8,
-    enableAutoLogging: true,
-    maxRetries: 2,
-    requestTimeoutMs: 30000,
-    qualityThreshold: 0.7, // auto-escalate if quality score below this
-    errorRateThreshold: 0.05, // disable model if error rate > 5%
+  // ═══ ESCALATION CHAINS ═══
+  // Defines the order models are tried during fallback
+  escalationChains: {
+    free: [
+      "nemotron-nano-9b",
+      "nemotron-nano-30b",
+      "nemotron-nano-12b-vl",
+      "nemotron-super-120b",
+    ],
+    nvidia: [
+      "nvidia-nemotron-super-49b",
+      "nvidia-nemotron-70b",
+      "nvidia-nemotron-ultra-253b",
+      "nvidia-llama-405b",
+      "nvidia-deepseek-r1",
+    ],
+    paid: ["claude-3-5-sonnet", "claude-3-opus", "gpt-4o"],
   },
 
-  // Storage paths (getter so env vars set after import are respected)
+  // ═══ ROUTING CONFIG ═══
+  routing: {
+    freeModelPriority: true,
+    dailyCostBudget: parseFloat(process.env.SMART_ROUTER_DAILY_BUDGET || "50"),
+    budgetWarnThreshold: 0.8,
+    maxRetries: 2,
+    requestTimeoutMs: 30000,
+    qualityThreshold: 0.7,
+    errorRateThreshold: 0.05,
+  },
+
+  // ═══ CIRCUIT BREAKER DEFAULTS ═══
+  circuitBreaker: {
+    failureThreshold: 5,
+    resetTimeoutMs: 30_000,
+    halfOpenMax: 2,
+    successThreshold: 3,
+    windowMs: 60_000,
+  },
+
+  // ═══ LOG ROTATION ═══
+  logRotation: {
+    maxDays: parseInt(process.env.SMART_ROUTER_LOG_RETENTION_DAYS || "30", 10),
+    maxSizeMb: parseInt(process.env.SMART_ROUTER_LOG_MAX_SIZE_MB || "100", 10),
+  },
+
+  // Storage (getter for late binding)
   get logDir() {
     return (
       process.env.SMART_ROUTER_LOG_DIR ||

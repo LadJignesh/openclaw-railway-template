@@ -10,19 +10,16 @@ function getRouter() {
   return router;
 }
 
-/** Expose the smart router instance for use by the dashboard stats endpoint. */
 export function getSmartRouterInstance() {
   return getRouter();
 }
 
 /**
  * Register smart-router API endpoints on an Express app.
- * All routes require the same basic auth as /setup.
- *
  * @param {import("express").Application} app
  */
 export function registerSmartRouterRoutes(app) {
-  // --- Status ---
+  // Status
   app.get("/setup/api/smart-router/status", (_req, res) => {
     try {
       const status = getRouter().getStatus();
@@ -32,7 +29,7 @@ export function registerSmartRouterRoutes(app) {
     }
   });
 
-  // --- Classify (dry run) ---
+  // Classify (dry run)
   app.post("/setup/api/smart-router/classify", (req, res) => {
     try {
       const { description, content, hasImage, priority } = req.body || {};
@@ -46,7 +43,7 @@ export function registerSmartRouterRoutes(app) {
     }
   });
 
-  // --- Execute task ---
+  // Execute task
   app.post("/setup/api/smart-router/run", async (req, res) => {
     try {
       const task = req.body;
@@ -60,7 +57,7 @@ export function registerSmartRouterRoutes(app) {
     }
   });
 
-  // --- Daily summary ---
+  // Daily summary
   app.get("/setup/api/smart-router/summary", (req, res) => {
     try {
       const date = req.query.date || undefined;
@@ -71,17 +68,18 @@ export function registerSmartRouterRoutes(app) {
     }
   });
 
-  // --- Model health stats ---
+  // Model health + circuit breakers
   app.get("/setup/api/smart-router/model-stats", (_req, res) => {
     try {
       const stats = getRouter().getModelStats();
-      res.json({ ok: true, models: stats });
+      const circuitBreakers = getRouter().getCircuitBreakers();
+      res.json({ ok: true, models: stats, circuitBreakers });
     } catch (err) {
       res.status(500).json({ ok: false, error: err.message });
     }
   });
 
-  // --- Task log entries ---
+  // Task logs
   app.get("/setup/api/smart-router/logs", (req, res) => {
     try {
       const date = req.query.date || undefined;

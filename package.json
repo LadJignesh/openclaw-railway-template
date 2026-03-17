@@ -8,7 +8,10 @@
   "scripts": {
     "dev": "node src/server.js",
     "start": "node src/server.js",
-    "lint": "node -c src/server.js"
+    "lint": "node -c src/server.js",
+    "test": "node src/lib/test.js && node src/smart-router/test.js",
+    "test:lib": "node src/lib/test.js",
+    "test:router": "node src/smart-router/test.js"
   },
   "dependencies": {
     "express": "^5.1.0",

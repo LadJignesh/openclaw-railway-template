@@ -1,12 +1,15 @@
-// SmartRouter — main orchestrator that ties classification, routing, execution,
-// cost tracking, and auto-scaling together.
+// SmartRouter — orchestrator that ties classification, routing, execution,
+// cost tracking, auto-scaling, and circuit breakers together.
 
 import { TaskClassifier } from "./task-classifier.js";
 import { ModelRouter } from "./model-router.js";
-import { FreeModelExecutor, PaidModelExecutor } from "./executors.js";
+import { FreeModelExecutor, PaidModelExecutor, getCircuitBreakerStatuses } from "./executors.js";
 import { CostTracker } from "./cost-tracker.js";
 import { AutoScaler } from "./auto-scaler.js";
 import config from "./config.js";
+import { createLogger } from "../lib/logger.js";
+
+const log = createLogger("smart-router");
 
 export class SmartRouter {
   constructor() {
@@ -20,26 +23,22 @@ export class SmartRouter {
 
   /**
    * Process a task end-to-end: classify → route → execute → log.
-   *
-   * @param {object} task - {
-   *   description: string,       // brief task description for logging
-   *   content: string,           // the actual prompt / input text
-   *   hasImage?: boolean,        // whether task includes image input
-   *   priority?: "low"|"high"|"critical",  // manual override
-   *   messages?: Array,          // pre-built messages array (overrides content)
-   *   temperature?: number,
-   *   maxTokens?: number,
-   * }
-   * @returns {Promise<object>} { text, classification, modelUsed, cost, logEntry }
    */
   async process(task) {
+    const startMs = Date.now();
+
     // 1. Classify
     const classification = this.classifier.classify(task);
+    log.info("task classified", {
+      classification: classification.classification,
+      complexity: classification.complexity,
+      inputTokens: classification.inputTokens,
+    });
 
     // 2. Route
     let selection = this.router.select(classification);
     if (!selection) {
-      throw new Error("No available model for this task — all models disabled or missing API keys");
+      throw new Error("No available model — all models disabled or missing API keys");
     }
 
     // 3. Build messages
@@ -52,7 +51,7 @@ export class SmartRouter {
       maxTokens: task.maxTokens,
     };
 
-    // 4. Execute (with fallback)
+    // 4. Execute with retry + fallback
     let result;
     let fallbackModel = null;
     let fallbackCost = null;
@@ -68,9 +67,12 @@ export class SmartRouter {
         break;
       } catch (err) {
         attempts++;
-        console.error(
-          `[smart-router] ${selection.modelKey} failed (attempt ${attempts}): ${err.message}`,
-        );
+        log.warn("model execution failed", {
+          model: selection.modelKey,
+          attempt: attempts,
+          error: err.message,
+          circuitOpen: err.name === "CircuitOpenError",
+        });
 
         const fallback = this.scaler.recordFailureAndGetFallback(
           selection.modelKey,
@@ -78,7 +80,6 @@ export class SmartRouter {
         );
 
         if (!fallback || attempts > maxRetries) {
-          // Log the failure and re-throw
           this.costTracker.log({
             description: task.description,
             classification: classification.classification,
@@ -86,19 +87,17 @@ export class SmartRouter {
             modelType: selection.type,
             success: false,
           });
-          throw new Error(
-            `All models failed for task. Last error: ${err.message}`,
-          );
+          throw new Error(`All models failed for task. Last error: ${err.message}`);
         }
 
         fallbackModel = fallback.modelKey;
         selection = fallback;
+        log.info("falling back to next model", { model: fallbackModel });
       }
     }
 
     // 5. Calculate cost
-    const cost = result.cost || 0; // free models have cost=0
-
+    const cost = result.cost || 0;
     if (fallbackModel && selection.type === "PAID") {
       fallbackCost = cost;
     }
@@ -111,11 +110,20 @@ export class SmartRouter {
       modelType: selection.type,
       inputTokens: result.inputTokens,
       outputTokens: result.outputTokens,
-      cost: fallbackModel ? 0 : cost, // original cost was 0 if it failed
+      cost: fallbackModel ? 0 : cost,
       latencyMs: result.latencyMs,
       success: true,
       fallbackModel,
       fallbackCost,
+    });
+
+    const totalMs = Date.now() - startMs;
+    log.info("task completed", {
+      model: selection.modelKey,
+      type: selection.type,
+      cost: logEntry.total_cost,
+      latencyMs: totalMs,
+      fallback: fallbackModel || null,
     });
 
     return {
@@ -132,46 +140,43 @@ export class SmartRouter {
     };
   }
 
-  /**
-   * Get daily cost summary.
-   */
   getDailySummary(date) {
     return this.costTracker.dailySummary(date);
   }
 
-  /**
-   * Get model health stats.
-   */
   getModelStats() {
     return this.scaler.getStats();
   }
 
-  /**
-   * Classify a task without executing (for preview/dry-run).
-   */
+  getCircuitBreakers() {
+    return getCircuitBreakerStatuses();
+  }
+
   classifyOnly(task) {
     const classification = this.classifier.classify(task);
     const selection = this.router.select(classification);
     return { classification, selectedModel: selection };
   }
 
-  /**
-   * Check system readiness (which API keys are configured).
-   */
   getStatus() {
     return {
       openrouterConfigured: Boolean(config.openrouterApiKey),
       anthropicConfigured: Boolean(config.anthropicApiKey),
       openaiConfigured: Boolean(config.openaiApiKey),
-      freeModelsAvailable: Boolean(config.openrouterApiKey),
+      nvidiaConfigured: Boolean(config.nvidiaApiKey),
+      freeModelsAvailable: Boolean(config.openrouterApiKey || config.nvidiaApiKey),
       paidModelsAvailable: Boolean(config.anthropicApiKey || config.openaiApiKey),
       dailyBudget: config.routing.dailyCostBudget,
       logDir: config.logDir,
+      circuitBreakers: this.getCircuitBreakers(),
     };
+  }
+
+  destroy() {
+    this.costTracker.destroy();
   }
 }
 
-// Re-export all components for direct access
 export { TaskClassifier } from "./task-classifier.js";
 export { ModelRouter } from "./model-router.js";
 export { FreeModelExecutor, PaidModelExecutor } from "./executors.js";
