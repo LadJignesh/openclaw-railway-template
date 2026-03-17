@@ -375,36 +375,63 @@ async function registerSmartRouterModels() {
     log.info("registering OpenRouter models with Openclaw", { count: orModels.length });
   }
 
-  if (providers.length === 0) return;
-
-  // Register model providers
-  const modelsConfig = { mode: "merge", providers };
-  const result = await clawCmd(["config", "set", "--json", "models", JSON.stringify(modelsConfig)]);
-  if (result.code !== 0) {
-    log.warn("failed to register smart-router models", { exit: result.code, output: result.output?.slice(0, 200) });
-  } else {
-    log.info("smart-router models registered in Openclaw config");
-  }
-
-  // Set agent default model + aliases so they appear in the chat dropdown
+  // Register NVIDIA as a custom OpenAI-compatible provider (object format, not array)
   if (smartConfig.nvidiaApiKey) {
-    // Primary: Qwen 3.5 (free, best quality/cost), fallbacks: other free NVIDIA models
+    const nvidiaProvider = {
+      baseUrl: "https://integrate.api.nvidia.com/v1",
+      apiKey: "NVIDIA_API_KEY",
+      api: "openai-completions",
+      models: [
+        { id: "qwen/qwen3.5-122b-a10b", name: "Qwen 3.5 122B MoE", contextWindow: 32768, maxTokens: 4096, input: ["text"] },
+        { id: "nvidia/llama-3.3-nemotron-super-49b-v1", name: "Nemotron Super 49B", contextWindow: 32768, maxTokens: 4096, input: ["text"] },
+        { id: "nvidia/llama-3.1-nemotron-ultra-253b-v1", name: "Nemotron Ultra 253B", contextWindow: 32768, maxTokens: 4096, input: ["text"] },
+        { id: "deepseek-ai/deepseek-r1", name: "DeepSeek R1", reasoning: true, contextWindow: 65536, maxTokens: 8192, input: ["text"] },
+        { id: "meta/llama-3.1-405b-instruct", name: "Llama 3.1 405B", contextWindow: 131072, maxTokens: 4096, input: ["text"] },
+      ],
+    };
+
+    const modelsConfig = { mode: "merge", providers: { nvidia: nvidiaProvider } };
+    const result = await clawCmd(["config", "set", "--json", "models", JSON.stringify(modelsConfig)]);
+    if (result.code !== 0) {
+      log.warn("failed to register NVIDIA models", { exit: result.code, output: result.output?.slice(0, 200) });
+    } else {
+      log.info("NVIDIA models registered in Openclaw config");
+    }
+
+    // Set agent default model (prefix with provider name "nvidia/")
     await clawCmd(["config", "set", "--json", "agents.defaults.model", JSON.stringify({
-      primary: "qwen/qwen3.5-122b-a10b",
-      fallbacks: ["deepseek-ai/deepseek-r1", "nvidia/llama-3.1-nemotron-ultra-253b-v1"],
+      primary: "nvidia/qwen/qwen3.5-122b-a10b",
+      fallbacks: ["nvidia/deepseek-ai/deepseek-r1", "nvidia/nvidia/llama-3.1-nemotron-ultra-253b-v1"],
     })]);
 
-    // Register all NVIDIA models with aliases for easy switching via /model
+    // Register aliases for easy switching via /model
     const modelAliases = {
-      "qwen/qwen3.5-122b-a10b": { alias: "qwen" },
-      "nvidia/llama-3.3-nemotron-super-49b-v1": { alias: "nemotron-49b" },
-      "nvidia/llama-3.1-nemotron-ultra-253b-v1": { alias: "nemotron-ultra" },
-      "deepseek-ai/deepseek-r1": { alias: "deepseek" },
-      "meta/llama-3.1-405b-instruct": { alias: "llama-405b" },
+      "nvidia/qwen/qwen3.5-122b-a10b": { alias: "qwen" },
+      "nvidia/nvidia/llama-3.3-nemotron-super-49b-v1": { alias: "nemotron-49b" },
+      "nvidia/nvidia/llama-3.1-nemotron-ultra-253b-v1": { alias: "nemotron-ultra" },
+      "nvidia/deepseek-ai/deepseek-r1": { alias: "deepseek" },
+      "nvidia/meta/llama-3.1-405b-instruct": { alias: "llama-405b" },
     };
     await clawCmd(["config", "set", "--json", "agents.defaults.models", JSON.stringify(modelAliases)]);
 
     log.info("agent defaults set to NVIDIA models (qwen primary)");
+  }
+
+  // Register OpenRouter free models if API key is set
+  if (smartConfig.openrouterApiKey) {
+    const orModels = Object.values(smartConfig.freeModels).map((m) => ({
+      id: m.id.replace(/:free$/, ""), name: m.name, contextWindow: 32768, maxTokens: 4096, input: ["text"],
+    }));
+    const orProvider = {
+      baseUrl: "https://openrouter.ai/api/v1",
+      apiKey: "OPENROUTER_API_KEY",
+      api: "openai-completions",
+      models: orModels,
+    };
+    const result = await clawCmd(["config", "set", "--json", "models.providers.openrouter", JSON.stringify(orProvider)]);
+    if (result.code !== 0) {
+      log.warn("failed to register OpenRouter models", { exit: result.code, output: result.output?.slice(0, 200) });
+    }
   }
 }
 
