@@ -89,7 +89,7 @@ export function buildAutoSetupPayload() {
     flow: "quickstart",
     authChoice: provider.authChoice,
     authSecret: provider.secret,
-    model: process.env.OPENCLAW_MODEL?.trim() || "anthropic/claude-sonnet-4-6",
+    model: process.env.OPENCLAW_MODEL?.trim() || (process.env.NVIDIA_API_KEY ? "qwen/qwen3.5-122b-a10b" : "anthropic/claude-sonnet-4-6"),
     ...channels,
     _provider: provider, // metadata for logging
   };

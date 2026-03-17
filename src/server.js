@@ -377,12 +377,34 @@ async function registerSmartRouterModels() {
 
   if (providers.length === 0) return;
 
+  // Register model providers
   const modelsConfig = { mode: "merge", providers };
   const result = await clawCmd(["config", "set", "--json", "models", JSON.stringify(modelsConfig)]);
   if (result.code !== 0) {
     log.warn("failed to register smart-router models", { exit: result.code, output: result.output?.slice(0, 200) });
   } else {
     log.info("smart-router models registered in Openclaw config");
+  }
+
+  // Set agent default model + aliases so they appear in the chat dropdown
+  if (smartConfig.nvidiaApiKey) {
+    // Primary: Qwen 3.5 (free, best quality/cost), fallbacks: paid models
+    await clawCmd(["config", "set", "--json", "agents.defaults.model", JSON.stringify({
+      primary: "qwen/qwen3.5-122b-a10b",
+      fallbacks: ["deepseek-ai/deepseek-r1", "anthropic/claude-sonnet-4-6"],
+    })]);
+
+    // Register all NVIDIA models with aliases for easy switching via /model
+    const modelAliases = {
+      "qwen/qwen3.5-122b-a10b": { alias: "qwen" },
+      "nvidia/llama-3.3-nemotron-super-49b-v1": { alias: "nemotron-49b" },
+      "nvidia/llama-3.1-nemotron-ultra-253b-v1": { alias: "nemotron-ultra" },
+      "deepseek-ai/deepseek-r1": { alias: "deepseek" },
+      "meta/llama-3.1-405b-instruct": { alias: "llama-405b" },
+    };
+    await clawCmd(["config", "set", "--json", "agents.defaults.models", JSON.stringify(modelAliases)]);
+
+    log.info("agent defaults set to NVIDIA models (qwen primary)");
   }
 }
 
