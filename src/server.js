@@ -388,10 +388,10 @@ async function registerSmartRouterModels() {
 
   // Set agent default model + aliases so they appear in the chat dropdown
   if (smartConfig.nvidiaApiKey) {
-    // Primary: Qwen 3.5 (free, best quality/cost), fallbacks: paid models
+    // Primary: Qwen 3.5 (free, best quality/cost), fallbacks: other free NVIDIA models
     await clawCmd(["config", "set", "--json", "agents.defaults.model", JSON.stringify({
       primary: "qwen/qwen3.5-122b-a10b",
-      fallbacks: ["deepseek-ai/deepseek-r1", "anthropic/claude-sonnet-4-6"],
+      fallbacks: ["deepseek-ai/deepseek-r1", "nvidia/llama-3.1-nemotron-ultra-253b-v1"],
     })]);
 
     // Register all NVIDIA models with aliases for easy switching via /model
