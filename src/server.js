@@ -626,6 +626,60 @@ app.post("/setup/api/console/run", requireSetupAuth, async (req, res) => {
   }
 });
 
+// ═══════════════════════════════════════════════════════════════════════
+// CONFIG EDITOR
+// ═══════════════════════════════════════════════════════════════════════
+
+app.get("/setup/api/config/raw", requireSetupAuth, async (_req, res) => {
+  try {
+    const configPath = path.join(STATE_DIR, "openclaw.json");
+    const raw = fs.readFileSync(configPath, "utf8");
+    return res.json({ ok: true, config: raw });
+  } catch (err) {
+    return res.status(404).json({ ok: false, error: `Config not found: ${err.code || err.message}` });
+  }
+});
+
+app.post("/setup/api/config/raw", requireSetupAuth, async (req, res) => {
+  try {
+    const { config: rawConfig } = req.body || {};
+    if (!rawConfig || typeof rawConfig !== "string") {
+      return res.status(400).json({ ok: false, error: "config field required (string)" });
+    }
+    if (rawConfig.length > 500_000) {
+      return res.status(400).json({ ok: false, error: "Config too large (max 500KB)" });
+    }
+
+    // Validate JSON
+    try { JSON.parse(rawConfig); } catch (e) {
+      return res.status(400).json({ ok: false, error: `Invalid JSON: ${e.message}` });
+    }
+
+    const configPath = path.join(STATE_DIR, "openclaw.json");
+
+    // Create timestamped backup
+    try {
+      const ts = new Date().toISOString().replace(/[:.]/g, "-");
+      fs.copyFileSync(configPath, `${configPath}.bak-${ts}`);
+    } catch { /* no existing config to backup */ }
+
+    fs.writeFileSync(configPath, rawConfig, { encoding: "utf8", mode: 0o600 });
+    log.info("config saved via editor");
+
+    // Restart gateway to apply
+    await gateway.restart();
+
+    return res.json({ ok: true });
+  } catch (err) {
+    log.error("config/raw save error", err);
+    return res.status(500).json({ ok: false, error: `Save failed: ${err.message}` });
+  }
+});
+
+// ═══════════════════════════════════════════════════════════════════════
+// DEBUG INFO
+// ═══════════════════════════════════════════════════════════════════════
+
 app.get("/setup/api/debug", requireSetupAuth, async (_req, res) => {
   const v = await clawCmd(["--version"]);
   const help = await clawCmd(["channels", "add", "--help"]);

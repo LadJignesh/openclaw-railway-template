@@ -197,6 +197,67 @@
         </div>
       </div>
 
+      <!-- Row 6: Debug Console + Config Editor -->
+      <div class="grid grid-cols-1 lg:grid-cols-2 gap-4">
+        <!-- Debug Console -->
+        <div class="bg-neutral-900 border border-neutral-800 rounded-xl p-5">
+          <h2 class="text-sm font-semibold text-neutral-300 mb-4">Debug Console</h2>
+          <div class="space-y-3">
+            <div class="flex gap-2">
+              <select id="console-cmd" class="flex-1 bg-neutral-800 border border-neutral-700 text-neutral-200 text-sm rounded-lg px-3 py-2 focus:outline-none focus:border-purple-500">
+                <optgroup label="Gateway">
+                  <option value="gateway.restart">gateway.restart</option>
+                  <option value="gateway.stop">gateway.stop</option>
+                  <option value="gateway.start">gateway.start</option>
+                </optgroup>
+                <optgroup label="OpenClaw">
+                  <option value="openclaw.version">openclaw.version</option>
+                  <option value="openclaw.status">openclaw.status</option>
+                  <option value="openclaw.health">openclaw.health</option>
+                  <option value="openclaw.doctor">openclaw.doctor</option>
+                  <option value="openclaw.logs.tail">openclaw.logs.tail</option>
+                </optgroup>
+                <optgroup label="Config">
+                  <option value="openclaw.config.get">openclaw.config.get</option>
+                  <option value="openclaw.config.set">openclaw.config.set</option>
+                  <option value="openclaw.config.set.json">openclaw.config.set.json</option>
+                </optgroup>
+                <optgroup label="Devices">
+                  <option value="openclaw.devices.list">openclaw.devices.list</option>
+                  <option value="openclaw.devices.approve">openclaw.devices.approve</option>
+                </optgroup>
+                <optgroup label="Plugins">
+                  <option value="openclaw.plugins.list">openclaw.plugins.list</option>
+                  <option value="openclaw.plugins.enable">openclaw.plugins.enable</option>
+                </optgroup>
+              </select>
+            </div>
+            <input id="console-arg" type="text" placeholder="Argument (optional)" class="w-full bg-neutral-800 border border-neutral-700 text-neutral-200 text-sm rounded-lg px-3 py-2 focus:outline-none focus:border-purple-500 placeholder-neutral-600" />
+            <button onclick="runConsoleCmd()" id="console-run-btn" class="w-full bg-purple-600 hover:bg-purple-500 text-white text-sm font-medium px-4 py-2 rounded-lg transition-colors">
+              Run Command
+            </button>
+            <pre id="console-output" class="bg-neutral-950 border border-neutral-800 rounded-lg p-3 text-xs text-neutral-400 font-mono max-h-64 overflow-auto whitespace-pre-wrap hidden"></pre>
+          </div>
+        </div>
+
+        <!-- Config Editor -->
+        <div class="bg-neutral-900 border border-neutral-800 rounded-xl p-5">
+          <h2 class="text-sm font-semibold text-neutral-300 mb-4">Config Editor</h2>
+          <div class="space-y-3">
+            <div class="flex gap-2">
+              <button onclick="loadConfig()" class="flex-1 bg-neutral-800 hover:bg-neutral-700 border border-neutral-700 text-neutral-300 text-sm font-medium px-3 py-2 rounded-lg transition-colors">
+                Load Config
+              </button>
+              <button onclick="saveConfig()" id="config-save-btn" class="flex-1 bg-emerald-600 hover:bg-emerald-500 text-white text-sm font-medium px-3 py-2 rounded-lg transition-colors">
+                Save Config
+              </button>
+            </div>
+            <textarea id="config-editor" rows="12" class="w-full bg-neutral-950 border border-neutral-800 text-neutral-200 text-xs font-mono rounded-lg p-3 focus:outline-none focus:border-purple-500 resize-y" placeholder="Click 'Load Config' to load openclaw.json..."></textarea>
+            <p id="config-status" class="text-xs text-neutral-600 hidden"></p>
+          </div>
+        </div>
+      </div>
+
       <!-- Footer -->
       <div class="text-center text-xs text-neutral-700 py-4">
         Data resets daily at midnight UTC · Last update: <span id="last-update">—</span> · Auto-refresh every 30s
@@ -213,7 +274,7 @@
       'openai/gpt-4o-mini':                   { bg: 'bg-teal-500/20',   text: 'text-teal-400',   bar: 'bg-teal-500',   border: 'border-teal-500/30' },
       // NVIDIA models
       'nvidia-nemotron-super-49b':            { bg: 'bg-lime-500/20',   text: 'text-lime-400',   bar: 'bg-lime-500',   border: 'border-lime-500/30' },
-      'nvidia-nemotron-70b':                  { bg: 'bg-lime-500/20',   text: 'text-lime-400',   bar: 'bg-lime-500',   border: 'border-lime-500/30' },
+      'nvidia-qwen-122b':                     { bg: 'bg-indigo-500/20', text: 'text-indigo-400', bar: 'bg-indigo-500', border: 'border-indigo-500/30' },
       'nvidia-nemotron-ultra-253b':           { bg: 'bg-emerald-500/20',text: 'text-emerald-400', bar: 'bg-emerald-500', border: 'border-emerald-500/30' },
       'nvidia-llama-405b':                    { bg: 'bg-emerald-500/20',text: 'text-emerald-400', bar: 'bg-emerald-500', border: 'border-emerald-500/30' },
       'nvidia-deepseek-r1':                   { bg: 'bg-sky-500/20',    text: 'text-sky-400',    bar: 'bg-sky-500',    border: 'border-sky-500/30' },
@@ -644,6 +705,102 @@
           </td>
         </tr>`;
       }).join('');
+    }
+
+    // ═══ Debug Console ═══
+    async function runConsoleCmd() {
+      const cmd = document.getElementById('console-cmd').value;
+      const arg = document.getElementById('console-arg').value.trim();
+      const output = document.getElementById('console-output');
+      const btn = document.getElementById('console-run-btn');
+
+      btn.disabled = true;
+      btn.textContent = 'Running...';
+      output.classList.remove('hidden');
+      output.textContent = 'Executing...';
+
+      try {
+        const res = await fetch('/setup/api/console/run', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          credentials: 'same-origin',
+          body: JSON.stringify({ command: cmd, arg: arg || undefined }),
+        });
+        const data = await res.json();
+        output.textContent = data.output || data.error || 'No output';
+        output.className = output.className.replace(/text-\S+/, data.ok ? 'text-emerald-400' : 'text-red-400');
+      } catch (err) {
+        output.textContent = 'Error: ' + String(err);
+        output.className = output.className.replace(/text-\S+/, 'text-red-400');
+      } finally {
+        btn.disabled = false;
+        btn.textContent = 'Run Command';
+      }
+    }
+
+    // ═══ Config Editor ═══
+    async function loadConfig() {
+      const editor = document.getElementById('config-editor');
+      const status = document.getElementById('config-status');
+      editor.value = 'Loading...';
+      status.classList.add('hidden');
+
+      try {
+        const res = await fetch('/setup/api/config/raw', { credentials: 'same-origin' });
+        const data = await res.json();
+        if (data.ok) {
+          editor.value = JSON.stringify(JSON.parse(data.config), null, 2);
+          status.textContent = 'Config loaded successfully';
+          status.className = 'text-xs text-emerald-500';
+        } else {
+          editor.value = '';
+          status.textContent = data.error || 'Failed to load config';
+          status.className = 'text-xs text-red-400';
+        }
+      } catch (err) {
+        editor.value = '';
+        status.textContent = 'Error: ' + String(err);
+        status.className = 'text-xs text-red-400';
+      }
+      status.classList.remove('hidden');
+    }
+
+    async function saveConfig() {
+      const editor = document.getElementById('config-editor');
+      const status = document.getElementById('config-status');
+      const btn = document.getElementById('config-save-btn');
+
+      // Validate JSON
+      try {
+        JSON.parse(editor.value);
+      } catch (err) {
+        status.textContent = 'Invalid JSON: ' + err.message;
+        status.className = 'text-xs text-red-400';
+        status.classList.remove('hidden');
+        return;
+      }
+
+      btn.disabled = true;
+      btn.textContent = 'Saving...';
+
+      try {
+        const res = await fetch('/setup/api/config/raw', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          credentials: 'same-origin',
+          body: JSON.stringify({ config: editor.value }),
+        });
+        const data = await res.json();
+        status.textContent = data.ok ? 'Config saved! Gateway restarting...' : (data.error || 'Save failed');
+        status.className = data.ok ? 'text-xs text-emerald-500' : 'text-xs text-red-400';
+      } catch (err) {
+        status.textContent = 'Error: ' + String(err);
+        status.className = 'text-xs text-red-400';
+      } finally {
+        btn.disabled = false;
+        btn.textContent = 'Save Config';
+        status.classList.remove('hidden');
+      }
     }
 
     // Auto-refresh every 30 seconds
