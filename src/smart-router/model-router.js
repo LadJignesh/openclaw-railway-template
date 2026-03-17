@@ -151,11 +151,11 @@ export class ModelRouter {
     if (["low", "very_low"].includes(complexity) && !this._isDisabled("nvidia-nemotron-super-49b")) {
       return pick("nvidia-nemotron-super-49b");
     }
-    if (["low_medium", "medium"].includes(complexity) && !this._isDisabled("nvidia-qwen-122b")) {
-      return pick("nvidia-qwen-122b");
+    if (["low_medium", "medium"].includes(complexity) && !this._isDisabled("nvidia-nemotron-70b")) {
+      return pick("nvidia-nemotron-70b");
     }
-    if ((complexity === "medium_high" || complexity === "high") && !this._isDisabled("nvidia-nemotron-ultra-253b")) {
-      return pick("nvidia-nemotron-ultra-253b");
+    if ((complexity === "medium_high" || complexity === "high") && !this._isDisabled("nvidia-llama-405b")) {
+      return pick("nvidia-llama-405b");
     }
     if (complexity === "very_high") {
       if (!this._isDisabled("nvidia-deepseek-r1")) return pick("nvidia-deepseek-r1");

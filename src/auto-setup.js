@@ -61,8 +61,7 @@ export function detectNvidia() {
   // Default Nvidia models available via integrate.api.nvidia.com
   const defaultModels = [
     "nvidia/llama-3.3-nemotron-super-49b-v1",
-    "qwen/qwen3.5-122b-a10b",
-    "nvidia/llama-3.1-nemotron-ultra-253b-v1",
+    "nvidia/llama-3.1-nemotron-70b-instruct",
     "meta/llama-3.1-405b-instruct",
     "deepseek-ai/deepseek-r1",
   ];
@@ -91,13 +90,13 @@ export function buildAutoSetupPayload() {
   const isNvidiaOnly = provider.nvidia === true;
   const defaultModel = isNvidiaOnly
     ? "nvidia/llama-3.3-nemotron-super-49b-v1"
-    : "qwen/qwen3.5-122b-a10b";
+    : undefined;
 
   return {
     flow: "quickstart",
     authChoice: provider.authChoice,
     authSecret: provider.secret,
-    model: process.env.OPENCLAW_MODEL?.trim() || defaultModel,
+    model: process.env.OPENCLAW_MODEL?.trim() || defaultModel || undefined,
     ...channels,
     _provider: provider, // metadata for logging
   };

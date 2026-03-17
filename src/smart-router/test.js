@@ -188,10 +188,10 @@ process.env.NVIDIA_API_KEY = "test-nvidia-key";
   assert(sel.useNvidiaDirect === true, "medium routine routes to NVIDIA direct");
   assert(sel.type === "FREE", "NVIDIA direct is FREE type");
 
-  // Important high → NVIDIA direct (nemotron ultra or deepseek)
+  // Important high → NVIDIA direct (llama-405b for high complexity)
   const sel2 = nRouter.select({ classification: "IMPORTANT", inputTokens: 2000, hasImage: false, complexity: "high" });
   assert(sel2.useNvidiaDirect === true, "important high → NVIDIA direct");
-  assert(sel2.modelKey === "nvidia-nemotron-ultra-253b", "high complexity → ultra-253b");
+  assert(sel2.modelKey === "nvidia-llama-405b", "high complexity → llama-405b");
 
   // Very high → DeepSeek R1
   const sel3 = nRouter.select({ classification: "IMPORTANT", inputTokens: 2000, hasImage: false, complexity: "very_high" });
