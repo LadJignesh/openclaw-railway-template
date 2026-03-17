@@ -559,6 +559,7 @@ const ALLOWED_CONSOLE_COMMANDS = new Set([
   "gateway.restart", "gateway.stop", "gateway.start",
   "openclaw.version", "openclaw.status", "openclaw.health",
   "openclaw.doctor", "openclaw.logs.tail", "openclaw.config.get",
+  "openclaw.config.set", "openclaw.config.set.json",
   "openclaw.devices.list", "openclaw.devices.approve",
   "openclaw.plugins.list", "openclaw.plugins.enable",
 ]);
@@ -587,6 +588,22 @@ app.post("/setup/api/console/run", requireSetupAuth, async (req, res) => {
     else if (command === "openclaw.config.get") {
       if (!arg?.trim()) return res.status(400).json({ ok: false, error: "Config path required" });
       result = await clawCmd(["config", "get", arg.trim()]);
+    }
+    else if (command === "openclaw.config.set") {
+      // arg format: "key value" e.g. "gateway.auth.token mytoken"
+      const parts = arg?.trim()?.split(/\s+/);
+      if (!parts || parts.length < 2) return res.status(400).json({ ok: false, error: "Usage: key value" });
+      const [key, ...rest] = parts;
+      result = await clawCmd(["config", "set", key, rest.join(" ")]);
+    }
+    else if (command === "openclaw.config.set.json") {
+      // arg format: "key {json}" e.g. 'models {"mode":"merge",...}'
+      const spaceIdx = arg?.trim()?.indexOf(" ");
+      if (!arg || spaceIdx === -1) return res.status(400).json({ ok: false, error: "Usage: key {json}" });
+      const key = arg.trim().slice(0, spaceIdx);
+      const jsonVal = arg.trim().slice(spaceIdx + 1);
+      try { JSON.parse(jsonVal); } catch { return res.status(400).json({ ok: false, error: "Invalid JSON value" }); }
+      result = await clawCmd(["config", "set", "--json", key, jsonVal]);
     }
     else if (command === "openclaw.devices.list") { result = await clawCmd(["devices", "list"]); }
     else if (command === "openclaw.devices.approve") {
