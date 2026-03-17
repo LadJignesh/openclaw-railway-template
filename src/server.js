@@ -347,35 +347,8 @@ function buildOnboardArgs(payload) {
 
 async function registerSmartRouterModels() {
   const smartConfig = (await import("./smart-router/config.js")).default;
-  const providers = [];
 
-  // Register NVIDIA direct models if API key is set
-  if (smartConfig.nvidiaApiKey) {
-    const nvidiaModels = Object.values(smartConfig.nvidiaDirectModels).map((m) => m.id);
-    providers.push({
-      id: "nvidia",
-      type: "openai",
-      apiBase: "https://integrate.api.nvidia.com/v1",
-      apiKeyEnv: "NVIDIA_API_KEY",
-      models: nvidiaModels,
-    });
-    log.info("registering NVIDIA models with Openclaw", { count: nvidiaModels.length, models: nvidiaModels });
-  }
-
-  // Register OpenRouter free models if API key is set
-  if (smartConfig.openrouterApiKey) {
-    const orModels = Object.values(smartConfig.freeModels).map((m) => m.id);
-    providers.push({
-      id: "openrouter",
-      type: "openai",
-      apiBase: "https://openrouter.ai/api/v1",
-      apiKeyEnv: "OPENROUTER_API_KEY",
-      models: orModels,
-    });
-    log.info("registering OpenRouter models with Openclaw", { count: orModels.length });
-  }
-
-  // Register NVIDIA as a custom OpenAI-compatible provider (object format, not array)
+  // Register NVIDIA as a custom OpenAI-compatible provider
   if (smartConfig.nvidiaApiKey) {
     const nvidiaProvider = {
       baseUrl: "https://integrate.api.nvidia.com/v1",
@@ -395,22 +368,25 @@ async function registerSmartRouterModels() {
     if (result.code !== 0) {
       log.warn("failed to register NVIDIA models", { exit: result.code, output: result.output?.slice(0, 200) });
     } else {
-      log.info("NVIDIA models registered in Openclaw config");
+      log.info("NVIDIA models registered in Openclaw config", {
+        count: nvidiaProvider.models.length,
+        models: nvidiaProvider.models.map((m) => m.id),
+      });
     }
 
-    // Set agent default model (prefix with provider name "nvidia/")
+    // Set agent default model — model IDs are prefixed with provider name once
     await clawCmd(["config", "set", "--json", "agents.defaults.model", JSON.stringify({
-      primary: "nvidia/qwen/qwen3.5-122b-a10b",
-      fallbacks: ["nvidia/deepseek-ai/deepseek-r1", "nvidia/nvidia/llama-3.1-nemotron-ultra-253b-v1"],
+      primary: "qwen/qwen3.5-122b-a10b",
+      fallbacks: ["deepseek-ai/deepseek-r1", "nvidia/llama-3.1-nemotron-ultra-253b-v1"],
     })]);
 
     // Register aliases for easy switching via /model
     const modelAliases = {
-      "nvidia/qwen/qwen3.5-122b-a10b": { alias: "qwen" },
-      "nvidia/nvidia/llama-3.3-nemotron-super-49b-v1": { alias: "nemotron-49b" },
-      "nvidia/nvidia/llama-3.1-nemotron-ultra-253b-v1": { alias: "nemotron-ultra" },
-      "nvidia/deepseek-ai/deepseek-r1": { alias: "deepseek" },
-      "nvidia/meta/llama-3.1-405b-instruct": { alias: "llama-405b" },
+      "qwen/qwen3.5-122b-a10b": { alias: "qwen" },
+      "nvidia/llama-3.3-nemotron-super-49b-v1": { alias: "nemotron-49b" },
+      "nvidia/llama-3.1-nemotron-ultra-253b-v1": { alias: "nemotron-ultra" },
+      "deepseek-ai/deepseek-r1": { alias: "deepseek" },
+      "meta/llama-3.1-405b-instruct": { alias: "llama-405b" },
     };
     await clawCmd(["config", "set", "--json", "agents.defaults.models", JSON.stringify(modelAliases)]);
 
@@ -431,6 +407,8 @@ async function registerSmartRouterModels() {
     const result = await clawCmd(["config", "set", "--json", "models.providers.openrouter", JSON.stringify(orProvider)]);
     if (result.code !== 0) {
       log.warn("failed to register OpenRouter models", { exit: result.code, output: result.output?.slice(0, 200) });
+    } else {
+      log.info("OpenRouter models registered in Openclaw config", { count: orModels.length });
     }
   }
 }

@@ -18,7 +18,7 @@ const config = {
     "nemotron-nano-9b": {
       id: "nvidia/nemotron-nano-9b-v2:free",
       name: "Nemotron Nano 9B V2",
-      maxInputTokens: 1000,
+      maxInputTokens: 8000,
       complexity: "very_low",
       capabilities: ["text"],
       speedRange: "1-3s",
@@ -27,7 +27,7 @@ const config = {
     "nemotron-nano-30b": {
       id: "nvidia/nemotron-3-nano-30b-a3b:free",
       name: "Nemotron Nano 30B",
-      maxInputTokens: 2000,
+      maxInputTokens: 16000,
       complexity: "low_medium",
       capabilities: ["text"],
       speedRange: "2-5s",
@@ -36,7 +36,7 @@ const config = {
     "nemotron-nano-12b-vl": {
       id: "nvidia/nemotron-nano-12b-v2-vl:free",
       name: "Nemotron Nano 12B V2 VL",
-      maxInputTokens: 4000,
+      maxInputTokens: 16000,
       complexity: "medium",
       capabilities: ["text", "vision"],
       speedRange: "3-7s",
@@ -45,7 +45,7 @@ const config = {
     "nemotron-super-120b": {
       id: "nvidia/nemotron-3-super-120b-a12b:free",
       name: "Nemotron 3 Super 120B",
-      maxInputTokens: 10000,
+      maxInputTokens: 32000,
       complexity: "medium_high",
       capabilities: ["text"],
       speedRange: "5-15s",
@@ -153,7 +153,7 @@ const config = {
     dailyCostBudget: parseFloat(process.env.SMART_ROUTER_DAILY_BUDGET || "50"),
     budgetWarnThreshold: 0.8,
     maxRetries: 2,
-    requestTimeoutMs: 30000,
+    requestTimeoutMs: 60000,
     qualityThreshold: 0.7,
     errorRateThreshold: 0.05,
   },

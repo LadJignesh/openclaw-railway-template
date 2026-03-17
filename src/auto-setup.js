@@ -12,6 +12,7 @@ const PROVIDERS = [
   { envVar: "GEMINI_API_KEY", authChoice: "gemini-api-key", flag: "--gemini-api-key", label: "Google Gemini" },
   { envVar: "MOONSHOT_API_KEY", authChoice: "moonshot-api-key", flag: "--moonshot-api-key", label: "Moonshot" },
   { envVar: "MINIMAX_API_KEY", authChoice: "minimax-api", flag: "--minimax-api-key", label: "MiniMax" },
+  { envVar: "NVIDIA_API_KEY", authChoice: "openai-api-key", flag: "--openai-api-key", label: "NVIDIA (OpenAI-compatible)", nvidia: true },
 ];
 
 /**
@@ -85,11 +86,18 @@ export function buildAutoSetupPayload() {
 
   const channels = detectChannels();
 
+  // When NVIDIA is the only provider, use its API key as auth secret
+  // and default to an NVIDIA-hosted model
+  const isNvidiaOnly = provider.nvidia === true;
+  const defaultModel = isNvidiaOnly
+    ? "nvidia/llama-3.3-nemotron-super-49b-v1"
+    : "qwen/qwen3.5-122b-a10b";
+
   return {
     flow: "quickstart",
     authChoice: provider.authChoice,
     authSecret: provider.secret,
-    model: process.env.OPENCLAW_MODEL?.trim() || "qwen/qwen3.5-122b-a10b",
+    model: process.env.OPENCLAW_MODEL?.trim() || defaultModel,
     ...channels,
     _provider: provider, // metadata for logging
   };

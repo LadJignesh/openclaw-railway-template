@@ -107,23 +107,33 @@ export class ModelRouter {
   }
 
   _selectFreeModel(inputTokens, hasImage, complexity) {
-    // Prefer NVIDIA direct if available (better quality than OpenRouter free tier)
+    const { freeModels } = config;
+
+    // Vision requires the VL model
+    if (hasImage && !this._isDisabled("nemotron-nano-12b-vl")) {
+      return { modelKey: "nemotron-nano-12b-vl", model: freeModels["nemotron-nano-12b-vl"], type: "FREE" };
+    }
+
+    // For medium+ complexity, prefer NVIDIA direct if available (better quality, still free)
+    if (["medium", "medium_high", "high", "very_high"].includes(complexity) && this.hasNvidiaDirect) {
+      const nvidia = this._selectNvidiaDirect(complexity, inputTokens);
+      if (nvidia) return nvidia;
+    }
+
+    // Use smaller OpenRouter free models based on token count and complexity
+    if (inputTokens < 8000 && ["low", "very_low"].includes(complexity) && !this._isDisabled("nemotron-nano-9b")) {
+      return { modelKey: "nemotron-nano-9b", model: freeModels["nemotron-nano-9b"], type: "FREE" };
+    }
+    if (inputTokens < 16000 && !["medium_high", "high", "very_high"].includes(complexity) && !this._isDisabled("nemotron-nano-30b")) {
+      return { modelKey: "nemotron-nano-30b", model: freeModels["nemotron-nano-30b"], type: "FREE" };
+    }
+
+    // For low-complexity tasks, try NVIDIA direct if available (even though we checked above for medium+)
     if (this.hasNvidiaDirect) {
       const nvidia = this._selectNvidiaDirect(complexity, inputTokens);
       if (nvidia) return nvidia;
     }
 
-    const { freeModels } = config;
-
-    if (hasImage && !this._isDisabled("nemotron-nano-12b-vl")) {
-      return { modelKey: "nemotron-nano-12b-vl", model: freeModels["nemotron-nano-12b-vl"], type: "FREE" };
-    }
-    if (inputTokens < 1000 && !this._isDisabled("nemotron-nano-9b")) {
-      return { modelKey: "nemotron-nano-9b", model: freeModels["nemotron-nano-9b"], type: "FREE" };
-    }
-    if (inputTokens < 2000 && complexity !== "medium_high" && !this._isDisabled("nemotron-nano-30b")) {
-      return { modelKey: "nemotron-nano-30b", model: freeModels["nemotron-nano-30b"], type: "FREE" };
-    }
     if (!this._isDisabled("nemotron-super-120b")) {
       return { modelKey: "nemotron-super-120b", model: freeModels["nemotron-super-120b"], type: "FREE" };
     }

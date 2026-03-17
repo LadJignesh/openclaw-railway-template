@@ -117,7 +117,7 @@ const router = new ModelRouter();
 }
 {
   const sel = router.select({ classification: "ROUTINE", inputTokens: 1500, hasImage: false, complexity: "low" });
-  assert(sel.modelKey === "nemotron-nano-30b", "1500 tokens → nano-30b");
+  assert(sel.modelKey === "nemotron-nano-9b", "1500 tokens low complexity → nano-9b");
 }
 {
   const sel = router.select({ classification: "ROUTINE", inputTokens: 500, hasImage: true, complexity: "low" });
@@ -178,9 +178,14 @@ process.env.NVIDIA_API_KEY = "test-nvidia-key";
 
   assert(nRouter.hasNvidiaDirect === true, "detects NVIDIA_API_KEY");
 
-  // Routine with NVIDIA → prefers NVIDIA direct models
-  const sel = nRouter.select({ classification: "ROUTINE", inputTokens: 500, hasImage: false, complexity: "low" });
-  assert(sel.useNvidiaDirect === true, "routine routes to NVIDIA direct");
+  // Low-complexity routine → fast small free model (not NVIDIA direct)
+  const selLow = nRouter.select({ classification: "ROUTINE", inputTokens: 500, hasImage: false, complexity: "low" });
+  assert(selLow.modelKey === "nemotron-nano-9b", "low complexity routine → nano-9b (fast)");
+  assert(selLow.type === "FREE", "NVIDIA present, low routine → FREE type");
+
+  // Medium complexity routine → NVIDIA direct (better quality)
+  const sel = nRouter.select({ classification: "ROUTINE", inputTokens: 2000, hasImage: false, complexity: "medium" });
+  assert(sel.useNvidiaDirect === true, "medium routine routes to NVIDIA direct");
   assert(sel.type === "FREE", "NVIDIA direct is FREE type");
 
   // Important high → NVIDIA direct (nemotron ultra or deepseek)

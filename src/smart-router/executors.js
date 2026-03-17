@@ -27,10 +27,19 @@ export function getCircuitBreakerStatuses() {
  */
 export class FreeModelExecutor {
   async execute(model, messages, opts = {}) {
-    if (opts.useNvidiaDirect || config.nvidiaApiKey) {
+    // Only use NVIDIA direct when explicitly requested (useNvidiaDirect flag)
+    // This prevents sending OpenRouter model IDs to the wrong API
+    if (opts.useNvidiaDirect) {
       return this._executeNvidiaDirect(model, messages, opts);
     }
-    return this._executeOpenRouter(model, messages, opts);
+    // For free OpenRouter models, use OpenRouter; fall back to NVIDIA if no OpenRouter key
+    if (config.openrouterApiKey) {
+      return this._executeOpenRouter(model, messages, opts);
+    }
+    if (config.nvidiaApiKey) {
+      return this._executeNvidiaDirect(model, messages, opts);
+    }
+    throw new Error("No free model API key set — set NVIDIA_API_KEY or OPENROUTER_API_KEY");
   }
 
   async _executeNvidiaDirect(model, messages, opts) {
@@ -39,7 +48,7 @@ export class FreeModelExecutor {
 
     return breakers.nvidia.exec(async () => {
       const temperature = opts.temperature ?? 0.7;
-      const maxTokens = opts.maxTokens ?? 1024;
+      const maxTokens = opts.maxTokens ?? 4096;
       const timeoutMs = opts.timeoutMs ?? config.routing.requestTimeoutMs;
 
       const body = { model: model.id, messages, temperature, max_tokens: maxTokens };
@@ -86,7 +95,7 @@ export class FreeModelExecutor {
 
     return breakers.openrouter.exec(async () => {
       const temperature = opts.temperature ?? 0.7;
-      const maxTokens = opts.maxTokens ?? 1024;
+      const maxTokens = opts.maxTokens ?? 4096;
       const timeoutMs = opts.timeoutMs ?? config.routing.requestTimeoutMs;
 
       const body = { model: model.id, messages, temperature, max_tokens: maxTokens };
