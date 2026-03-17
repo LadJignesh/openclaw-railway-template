@@ -90,7 +90,7 @@ export function buildAutoSetupPayload() {
     flow: "quickstart",
     authChoice: provider.authChoice,
     authSecret: provider.secret,
-    model: process.env.OPENCLAW_MODEL?.trim() || "",
+    model: process.env.OPENCLAW_MODEL?.trim() || "minimax/m2.1-lightning",
     ...channels,
     _provider: provider, // metadata for logging
   };

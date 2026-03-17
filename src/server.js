@@ -886,12 +886,7 @@ async function runAutoSetup() {
       );
       console.log(`[auto-setup] NVIDIA provider configured (exit=${nr.code})`);
 
-      // If no model was explicitly set, default to a Nvidia model
-      if (!payload.model) {
-        const defaultNvidiaModel = nvidia.models[0];
-        const mr = await runCmd(OPENCLAW_NODE, clawArgs(["models", "set", defaultNvidiaModel]));
-        console.log(`[auto-setup] Default model set to ${defaultNvidiaModel} (exit=${mr.code})`);
-      }
+      // NVIDIA is available as a provider but minimax/m2.1-lightning stays the default model
     }
 
     // Start gateway
